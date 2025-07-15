@@ -35,6 +35,7 @@ interface CreateInstanceForm {
   volume_size?: number;
   volume_type?: string;
   delete_on_termination: boolean;
+  auto_assign_floating_ip: boolean;
 }
 
 interface Image {
@@ -104,7 +105,9 @@ const CreateInstancePage: React.FC = () => {
       security_groups: ['default'],
       metadata: {},
       boot_source: 'image',
-      delete_on_termination: true
+      delete_on_termination: true,
+      availability_zone: 'nova',
+      auto_assign_floating_ip: false
     }
   });
 
@@ -199,7 +202,7 @@ const CreateInstancePage: React.FC = () => {
           security_groups,
           ...(data.description && { description: data.description }),
           ...(data.key_name && { key_name: data.key_name }),
-          ...(data.availability_zone && { availability_zone: data.availability_zone }),
+          availability_zone: 'nova',
           ...(data.user_data && { user_data: btoa(data.user_data) }), // base64 encoding
           ...(Object.keys(data.metadata).length > 0 && { metadata: data.metadata }),
           min_count: 1,
@@ -211,6 +214,40 @@ const CreateInstancePage: React.FC = () => {
       console.log('Creating instance with data:', serverData);
       
       const response = await novaService.createServer(serverData);
+      
+      // 유동 IP 자동 할당
+      if (data.auto_assign_floating_ip && response.server?.id) {
+        try {
+          // 잠시 대기 후 유동 IP 할당 (인스턴스가 생성될 시간)
+          setTimeout(async () => {
+            try {
+                             // 유동 IP 목록 가져오기
+               const floatingIPs = await neutronService.getFloatingIps();
+              const availableIP = floatingIPs.floatingips?.find((fip: any) => !fip.port_id);
+              
+              if (availableIP) {
+                // 기존 유동 IP 연결
+                await novaService.attachFloatingIP(response.server.id, availableIP.floating_ip_address);
+                toast.success('유동 IP가 자동으로 할당되었습니다.');
+              } else {
+                // 새로운 유동 IP 생성 및 연결
+                const newFloatingIP = await neutronService.createFloatingIP({
+                  floating_network_id: 'public' // 기본 공용 네트워크 사용
+                });
+                if (newFloatingIP.floatingip) {
+                  await novaService.attachFloatingIP(response.server.id, newFloatingIP.floatingip.floating_ip_address);
+                  toast.success('새로운 유동 IP가 생성되고 할당되었습니다.');
+                }
+              }
+            } catch (ipError) {
+              console.error('유동 IP 할당 실패:', ipError);
+              toast.error('유동 IP 할당에 실패했습니다.');
+            }
+          }, 10000); // 10초 후 유동 IP 할당
+        } catch (ipError) {
+          console.error('유동 IP 할당 실패:', ipError);
+        }
+      }
       
       toast.success('가상머신 생성이 시작되었습니다!');
       navigate('/compute');
@@ -376,18 +413,13 @@ const CreateInstancePage: React.FC = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   가용 영역
                 </label>
-                <Controller
-                  name="availability_zone"
-                  control={control}
-                  render={({ field }) => (
-                    <select {...field} className="input w-full">
-                      <option value="">자동 선택</option>
-                      {availabilityZones.map(az => (
-                        <option key={az} value={az}>{az}</option>
-                      ))}
-                    </select>
-                  )}
+                <input
+                  type="text"
+                  value="nova"
+                  disabled
+                  className="input w-full bg-gray-50 text-gray-500 cursor-not-allowed"
                 />
+                <p className="mt-1 text-xs text-gray-500">가용 영역이 nova로 고정되어 있습니다.</p>
               </div>
             </div>
           </div>
@@ -657,6 +689,28 @@ const CreateInstancePage: React.FC = () => {
                   </div>
                 )}
               />
+              
+              {/* 유동 IP 자동 할당 */}
+              <div className="mt-6 pt-6 border-t border-gray-200">
+                <Controller
+                  name="auto_assign_floating_ip"
+                  control={control}
+                  render={({ field }) => (
+                    <label className="flex items-center">
+                      <input
+                        type="checkbox"
+                        checked={field.value}
+                        onChange={field.onChange}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <div className="ml-3">
+                        <span className="text-sm font-medium text-gray-700">유동 IP 자동 할당</span>
+                        <p className="text-xs text-gray-500">인스턴스 생성 후 자동으로 유동 IP를 할당하고 연결합니다.</p>
+                      </div>
+                    </label>
+                  )}
+                />
+              </div>
             </div>
 
             {/* 보안 그룹 */}
@@ -677,7 +731,10 @@ const CreateInstancePage: React.FC = () => {
                 control={control}
                 render={({ field }) => (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {securityGroups.filter(sg => sg.name === 'default' || field.value.includes(sg.name)).map(sg => (
+                    {securityGroups.filter((sg, index) => 
+                      (sg.name === 'default' && securityGroups.findIndex(s => s.name === 'default') === index) || 
+                      (sg.name !== 'default' && field.value.includes(sg.name))
+                    ).map(sg => (
                       <label key={sg.id} className="flex items-center p-3 border border-gray-200 rounded-lg">
                         <input
                           type="checkbox"
@@ -947,6 +1004,10 @@ echo '<h1>Hello from OpenStack!</h1>' > /var/www/html/index.html`}
                   <div>
                     <dt className="text-sm font-medium text-gray-500">키 페어</dt>
                     <dd className="text-sm text-gray-900">{watch('key_name') || '없음'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-sm font-medium text-gray-500">유동 IP 자동 할당</dt>
+                    <dd className="text-sm text-gray-900">{watch('auto_assign_floating_ip') ? '예' : '아니오'}</dd>
                   </div>
                 </dl>
               </div>

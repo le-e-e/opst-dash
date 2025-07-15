@@ -117,7 +117,7 @@ const Layout: React.FC = () => {
       </div>
 
       {/* 메인 콘텐츠 */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 flex flex-col">
         {/* 상단 헤더 */}
         <header className="bg-white shadow-sm border-b border-gray-200">
           <div className="flex items-center justify-between p-4">

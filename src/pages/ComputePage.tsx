@@ -694,16 +694,8 @@ const ComputePage: React.FC = () => {
 
       {/* 인스턴스 목록 */}
       <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+        <div className="px-6 py-4 border-b border-gray-200">
           <h3 className="text-lg font-medium text-gray-900">인스턴스 목록</h3>
-          <button
-            onClick={fetchInstances}
-            disabled={loading}
-            className="inline-flex items-center px-3 py-1 text-sm text-gray-600 hover:text-gray-800"
-          >
-            <RefreshCw className={`h-4 w-4 mr-1 ${loading ? 'animate-spin' : ''}`} />
-            새로고침
-          </button>
         </div>
         
         {instances.length === 0 ? (
