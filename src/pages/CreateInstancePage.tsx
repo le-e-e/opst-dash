@@ -31,8 +31,6 @@ interface CreateInstanceForm {
   availability_zone?: string;
   user_data?: string;
   metadata: { [key: string]: string };
-  min_count: number;
-  max_count: number;
   boot_source: 'image' | 'volume' | 'snapshot';
   volume_size?: number;
   volume_type?: string;
@@ -102,8 +100,6 @@ const CreateInstancePage: React.FC = () => {
       networks: [],
       security_groups: ['default'],
       metadata: {},
-      min_count: 1,
-      max_count: 1,
       boot_source: 'image',
       delete_on_termination: true
     }
@@ -203,8 +199,8 @@ const CreateInstancePage: React.FC = () => {
           ...(data.availability_zone && { availability_zone: data.availability_zone }),
           ...(data.user_data && { user_data: btoa(data.user_data) }), // base64 encoding
           ...(Object.keys(data.metadata).length > 0 && { metadata: data.metadata }),
-          min_count: data.min_count,
-          max_count: data.max_count,
+          min_count: 1,
+          max_count: 1,
           ...bootConfig
         }
       };
@@ -280,7 +276,7 @@ const CreateInstancePage: React.FC = () => {
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className="max-w-4xl mx-auto space-y-6 pb-20">
       {/* 헤더 */}
       <div className="flex items-center space-x-4">
         <button 
@@ -371,43 +367,7 @@ const CreateInstancePage: React.FC = () => {
                 />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  인스턴스 개수
-                </label>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Controller
-                      name="min_count"
-                      control={control}
-                      render={({ field }) => (
-                        <input
-                          {...field}
-                          type="number"
-                          min="1"
-                          className="input w-full"
-                          placeholder="최소"
-                        />
-                      )}
-                    />
-                  </div>
-                  <div>
-                    <Controller
-                      name="max_count"
-                      control={control}
-                      render={({ field }) => (
-                        <input
-                          {...field}
-                          type="number"
-                          min="1"
-                          className="input w-full"
-                          placeholder="최대"
-                        />
-                      )}
-                    />
-                  </div>
-                </div>
-              </div>
+
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -866,10 +826,7 @@ const CreateInstancePage: React.FC = () => {
                     <dt className="text-sm font-medium text-gray-500">이름</dt>
                     <dd className="text-sm text-gray-900">{watch('name')}</dd>
                   </div>
-                  <div>
-                    <dt className="text-sm font-medium text-gray-500">개수</dt>
-                    <dd className="text-sm text-gray-900">{watch('min_count')} - {watch('max_count')}</dd>
-                  </div>
+
                   <div>
                     <dt className="text-sm font-medium text-gray-500">가용 영역</dt>
                     <dd className="text-sm text-gray-900">{watch('availability_zone') || '자동 선택'}</dd>

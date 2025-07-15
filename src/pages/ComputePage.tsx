@@ -193,6 +193,25 @@ const ComputePage: React.FC = () => {
     }
   };
 
+  const handleInstanceAction = async (instanceId: string, action: string) => {
+    switch (action) {
+      case 'start':
+        await handleStart(instanceId);
+        break;
+      case 'stop':
+        await handleStop(instanceId);
+        break;
+      case 'reboot':
+        await handleReboot(instanceId);
+        break;
+      case 'delete':
+        await handleDelete(instanceId);
+        break;
+      default:
+        console.warn('Unknown action:', action);
+    }
+  };
+
   const handleDelete = async (instanceId: string) => {
     if (!confirm('정말로 이 인스턴스를 삭제하시겠습니까?')) return;
     
@@ -364,6 +383,20 @@ const ComputePage: React.FC = () => {
     fetchInstances();
   }, []);
 
+  // 외부 클릭 시 드롭다운 메뉴 닫기
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (showActionMenu) {
+        setShowActionMenu(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showActionMenu]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -478,13 +511,10 @@ const ComputePage: React.FC = () => {
             <table className="w-full">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">인스턴스</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">인스턴스 이름</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IP 주소</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">이미지</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">플레이버</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">가용 영역</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">생성일</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
                 </tr>
               </thead>
@@ -510,11 +540,6 @@ const ComputePage: React.FC = () => {
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(instance.status, instance.task_state)}`}>
-                          {getStatusText(instance.status, instance.task_state)}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900">
                           {ips.length > 0 ? (
                             <div className="space-y-1">
@@ -532,11 +557,6 @@ const ComputePage: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900">
-                          {instance.image ? getImageName(instance.image.id) : 'N/A'}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">
                           {flavorInfo ? (
                             <div className="space-y-1">
                               <div className="font-medium">{flavorInfo.name}</div>
@@ -549,56 +569,107 @@ const ComputePage: React.FC = () => {
                           )}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {instance.availability_zone || 'N/A'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {new Date(instance.created).toLocaleDateString('ko-KR', {
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })}
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(instance.status, instance.task_state)}`}>
+                          {getStatusText(instance.status, instance.task_state)}
+                        </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        <div className="flex items-center space-x-2">
+                        <div className="relative">
                           <button
-                            onClick={() => handleInstanceClick(instance.id)}
-                            className="text-blue-600 hover:text-blue-900 p-1 rounded"
-                            title="상세 정보"
+                            onClick={() => setShowActionMenu(showActionMenu === instance.id ? null : instance.id)}
+                            className="inline-flex items-center px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
+                            title="작업 메뉴"
                           >
-                            <Eye className="h-4 w-4" />
+                            <Settings className="h-4 w-4 mr-1" />
+                            작업
                           </button>
                           
-                          <div className="relative">
-                            <button
-                              onClick={() => setShowActionMenu(showActionMenu === instance.id ? null : instance.id)}
-                              className="text-gray-600 hover:text-gray-900 p-1 rounded"
-                              title="작업 메뉴"
-                            >
-                              <MoreVertical className="h-4 w-4" />
-                            </button>
-                            
-                            {showActionMenu === instance.id && (
-                              <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg border border-gray-200 py-1 z-10">
-                                {getActionMenuItems(instance).map((item, index) => (
+                          {showActionMenu === instance.id && (
+                            <div className="absolute right-0 mt-2 w-56 bg-white rounded-md shadow-xl border border-gray-200 py-1 z-20">
+                              <button
+                                onClick={() => {
+                                  handleInstanceClick(instance.id);
+                                  setShowActionMenu(null);
+                                }}
+                                className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                              >
+                                <Eye className="h-4 w-4 mr-3" />
+                                상세 정보
+                              </button>
+                              <div className="border-t border-gray-100 my-1"></div>
+                              {instance.status === 'ACTIVE' && (
+                                <>
                                   <button
-                                    key={index}
                                     onClick={() => {
-                                      item.action();
+                                      handleInstanceAction(instance.id, 'stop');
                                       setShowActionMenu(null);
                                     }}
-                                    disabled={item.disabled}
-                                    className={`flex items-center w-full px-4 py-2 text-sm hover:bg-gray-50 ${item.color} ${item.disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                    className="flex items-center w-full px-4 py-2 text-sm text-orange-600 hover:bg-orange-50"
                                   >
-                                    <item.icon className="h-4 w-4 mr-3" />
-                                    {item.label}
+                                    <Square className="h-4 w-4 mr-3" />
+                                    인스턴스 중지
                                   </button>
-                                ))}
-                              </div>
-                            )}
-                          </div>
+                                  <button
+                                    onClick={() => {
+                                      handleInstanceAction(instance.id, 'reboot');
+                                      setShowActionMenu(null);
+                                    }}
+                                    className="flex items-center w-full px-4 py-2 text-sm text-blue-600 hover:bg-blue-50"
+                                  >
+                                    <RotateCcw className="h-4 w-4 mr-3" />
+                                    인스턴스 재시작
+                                  </button>
+                                </>
+                              )}
+                              {instance.status === 'SHUTOFF' && (
+                                <button
+                                  onClick={() => {
+                                    handleInstanceAction(instance.id, 'start');
+                                    setShowActionMenu(null);
+                                  }}
+                                  className="flex items-center w-full px-4 py-2 text-sm text-green-600 hover:bg-green-50"
+                                >
+                                  <Play className="h-4 w-4 mr-3" />
+                                  인스턴스 시작
+                                </button>
+                              )}
+                              <div className="border-t border-gray-100 my-1"></div>
+                              <button
+                                onClick={() => {
+                                                                     // TODO: 유동 IP 설정 기능
+                                   toast('유동 IP 설정 기능은 준비중입니다.');
+                                  setShowActionMenu(null);
+                                }}
+                                className="flex items-center w-full px-4 py-2 text-sm text-purple-600 hover:bg-purple-50"
+                              >
+                                <Globe className="h-4 w-4 mr-3" />
+                                유동 IP 설정
+                              </button>
+                              <button
+                                onClick={() => {
+                                                                     // TODO: 보안 그룹 설정 기능
+                                   toast('보안 그룹 설정 기능은 준비중입니다.');
+                                  setShowActionMenu(null);
+                                }}
+                                className="flex items-center w-full px-4 py-2 text-sm text-indigo-600 hover:bg-indigo-50"
+                              >
+                                <Shield className="h-4 w-4 mr-3" />
+                                보안 그룹
+                              </button>
+                              <div className="border-t border-gray-100 my-1"></div>
+                              <button
+                                onClick={() => {
+                                  handleInstanceAction(instance.id, 'delete');
+                                  setShowActionMenu(null);
+                                }}
+                                className="flex items-center w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50"
+                              >
+                                <Trash2 className="h-4 w-4 mr-3" />
+                                인스턴스 삭제
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </td>
                     </tr>
