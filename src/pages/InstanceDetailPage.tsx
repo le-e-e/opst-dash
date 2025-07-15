@@ -5,7 +5,7 @@ import {
   Network, 
   HardDrive, 
   Cpu, 
-  Memory, 
+  Zap, 
   Clock, 
   Tag, 
   Shield, 
@@ -22,7 +22,6 @@ import {
   Settings,
   Info,
   Activity,
-  Zap,
   Database
 } from 'lucide-react';
 import { novaService, neutronService, cinderService } from '../services/openstack';
@@ -437,7 +436,7 @@ const InstanceDetailPage: React.FC = () => {
                 <div className="flex justify-between">
                   <dt className="text-sm font-medium text-gray-500">메모리</dt>
                   <dd className="text-sm text-gray-900 flex items-center">
-                    <Memory className="h-4 w-4 mr-1" />
+                    <Zap className="h-4 w-4 mr-1" />
                     {flavor.ram} MB ({(flavor.ram / 1024).toFixed(1)} GB)
                   </dd>
                 </div>
