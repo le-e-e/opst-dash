@@ -20,7 +20,8 @@ import {
   Network,
   HardDrive,
   Eye,
-  ArrowRight
+  ArrowRight,
+  X
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { novaService, neutronService, glanceService } from '../services/openstack';
@@ -70,6 +71,7 @@ const ComputePage: React.FC = () => {
   const [images, setImages] = useState<Image[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [bulkActionLoading, setBulkActionLoading] = useState(false);
   const [selectedInstances, setSelectedInstances] = useState<string[]>([]);
   const [showActionMenu, setShowActionMenu] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -190,6 +192,109 @@ const ComputePage: React.FC = () => {
       toast.error('인스턴스 재개에 실패했습니다.');
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  // 개별 인스턴스 선택/해제
+  const handleInstanceSelect = (instanceId: string) => {
+    setSelectedInstances(prev => 
+      prev.includes(instanceId) 
+        ? prev.filter(id => id !== instanceId)
+        : [...prev, instanceId]
+    );
+  };
+
+  // 전체 선택/해제
+  const handleSelectAll = () => {
+    if (selectedInstances.length === instances.length) {
+      setSelectedInstances([]);
+    } else {
+      setSelectedInstances(instances.map(i => i.id));
+    }
+  };
+
+  // 일괄 작업 함수들
+  const handleBulkAction = async (action: string) => {
+    if (selectedInstances.length === 0) {
+      toast.error('선택된 인스턴스가 없습니다.');
+      return;
+    }
+
+    const selectedInstancesData = instances.filter(i => selectedInstances.includes(i.id));
+
+    // 작업 가능 여부 확인
+    const canPerformAction = (instance: Instance, action: string) => {
+      switch (action) {
+        case 'start':
+          return instance.status === 'SHUTOFF';
+        case 'stop':
+          return instance.status === 'ACTIVE';
+        case 'reboot':
+          return instance.status === 'ACTIVE';
+        case 'delete':
+          return true; // 삭제는 모든 상태에서 가능
+        default:
+          return false;
+      }
+    };
+
+    const validInstances = selectedInstancesData.filter(i => canPerformAction(i, action));
+    const invalidInstances = selectedInstancesData.filter(i => !canPerformAction(i, action));
+
+    if (invalidInstances.length > 0) {
+      const actionNames = {
+        start: '시작',
+        stop: '중지',
+        reboot: '재시작',
+        delete: '삭제'
+      };
+      
+      toast.error(`${invalidInstances.length}개 인스턴스는 ${actionNames[action as keyof typeof actionNames]}할 수 없는 상태입니다.`);
+      
+      if (validInstances.length === 0) return;
+    }
+
+    if (action === 'delete') {
+      if (!confirm(`정말로 ${validInstances.length}개의 인스턴스를 삭제하시겠습니까?`)) {
+        return;
+      }
+    }
+
+    try {
+      setBulkActionLoading(true);
+      
+      const promises = validInstances.map(instance => {
+        switch (action) {
+          case 'start':
+            return novaService.startServer(instance.id);
+          case 'stop':
+            return novaService.stopServer(instance.id);
+          case 'reboot':
+            return novaService.rebootServer(instance.id);
+          case 'delete':
+            return novaService.deleteServer(instance.id);
+          default:
+            return Promise.resolve();
+        }
+      });
+
+      await Promise.all(promises);
+      
+      const actionNames = {
+        start: '시작',
+        stop: '중지',
+        reboot: '재시작',
+        delete: '삭제'
+      };
+      
+      toast.success(`${validInstances.length}개 인스턴스 ${actionNames[action as keyof typeof actionNames]} 완료`);
+      setSelectedInstances([]);
+      fetchInstances();
+    } catch (error) {
+      console.error('일괄 작업 실패:', error);
+      toast.error('일괄 작업 중 오류가 발생했습니다.');
+    } finally {
+      setBulkActionLoading(false);
     }
   };
 
@@ -379,8 +484,37 @@ const ComputePage: React.FC = () => {
     return items.map(item => ({ ...item, disabled: isLoading }));
   };
 
+  // 인스턴스 상태만 업데이트하는 함수
+  const updateInstanceStatuses = async () => {
+    try {
+      const response = await novaService.getServers();
+      const newInstances = response.servers || [];
+      
+      setInstances(prevInstances => 
+        prevInstances.map(prevInstance => {
+          const updatedInstance = newInstances.find((ni: Instance) => ni.id === prevInstance.id);
+          return updatedInstance ? { ...prevInstance, ...updatedInstance } : prevInstance;
+        }).filter(instance => 
+          newInstances.some((ni: Instance) => ni.id === instance.id)
+        ).concat(
+          newInstances.filter((ni: Instance) => 
+            !prevInstances.some(pi => pi.id === ni.id)
+          )
+        )
+      );
+    } catch (error) {
+      console.error('상태 업데이트 실패:', error);
+    }
+  };
+
   useEffect(() => {
     fetchInstances();
+  }, []);
+
+  // 5초마다 인스턴스 상태 업데이트
+  useEffect(() => {
+    const interval = setInterval(updateInstanceStatuses, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   // 외부 클릭 시 드롭다운 메뉴 닫기
@@ -488,10 +622,88 @@ const ComputePage: React.FC = () => {
         </div>
       </div>
 
+      {/* 일괄 작업 버튼들 */}
+      {selectedInstances.length > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center">
+              <span className="text-sm font-medium text-blue-900">
+                {selectedInstances.length}개 인스턴스 선택됨
+              </span>
+            </div>
+            <div className="flex space-x-2">
+              <button
+                onClick={() => handleBulkAction('start')}
+                disabled={bulkActionLoading}
+                className="inline-flex items-center px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-50"
+              >
+                {bulkActionLoading ? (
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-1"></div>
+                ) : (
+                  <Play className="h-4 w-4 mr-1" />
+                )}
+                시작
+              </button>
+              <button
+                onClick={() => handleBulkAction('stop')}
+                disabled={bulkActionLoading}
+                className="inline-flex items-center px-3 py-1 bg-orange-600 text-white text-sm rounded hover:bg-orange-700 disabled:opacity-50"
+              >
+                {bulkActionLoading ? (
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-1"></div>
+                ) : (
+                  <Square className="h-4 w-4 mr-1" />
+                )}
+                중지
+              </button>
+              <button
+                onClick={() => handleBulkAction('reboot')}
+                disabled={bulkActionLoading}
+                className="inline-flex items-center px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50"
+              >
+                {bulkActionLoading ? (
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-1"></div>
+                ) : (
+                  <RotateCcw className="h-4 w-4 mr-1" />
+                )}
+                재시작
+              </button>
+              <button
+                onClick={() => handleBulkAction('delete')}
+                disabled={bulkActionLoading}
+                className="inline-flex items-center px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700 disabled:opacity-50"
+              >
+                {bulkActionLoading ? (
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-1"></div>
+                ) : (
+                  <Trash2 className="h-4 w-4 mr-1" />
+                )}
+                삭제
+              </button>
+              <button
+                onClick={() => setSelectedInstances([])}
+                className="inline-flex items-center px-3 py-1 bg-gray-500 text-white text-sm rounded hover:bg-gray-600"
+              >
+                <X className="h-4 w-4 mr-1" />
+                선택 해제
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 인스턴스 목록 */}
       <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200">
+        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
           <h3 className="text-lg font-medium text-gray-900">인스턴스 목록</h3>
+          <button
+            onClick={fetchInstances}
+            disabled={loading}
+            className="inline-flex items-center px-3 py-1 text-sm text-gray-600 hover:text-gray-800"
+          >
+            <RefreshCw className={`h-4 w-4 mr-1 ${loading ? 'animate-spin' : ''}`} />
+            새로고침
+          </button>
         </div>
         
         {instances.length === 0 ? (
@@ -511,6 +723,14 @@ const ComputePage: React.FC = () => {
             <table className="w-full">
               <thead className="bg-gray-50">
                 <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-12">
+                    <input
+                      type="checkbox"
+                      checked={selectedInstances.length === instances.length && instances.length > 0}
+                      onChange={handleSelectAll}
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">인스턴스 이름</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IP 주소</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">플레이버</th>
@@ -524,7 +744,15 @@ const ComputePage: React.FC = () => {
                   const flavorInfo = getFlavorInfo(instance.flavor?.id || '');
                   
                   return (
-                    <tr key={instance.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={instance.id} className={`hover:bg-gray-50 transition-colors ${selectedInstances.includes(instance.id) ? 'bg-blue-50' : ''}`}>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <input
+                          type="checkbox"
+                          checked={selectedInstances.includes(instance.id)}
+                          onChange={() => handleInstanceSelect(instance.id)}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                      </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
                           <Server className="h-5 w-5 text-gray-400 mr-3 flex-shrink-0" />
@@ -574,128 +802,15 @@ const ComputePage: React.FC = () => {
                           {getStatusText(instance.status, instance.task_state)}
                         </span>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        <div className="relative">
-                          <button
-                            onClick={() => setShowActionMenu(showActionMenu === instance.id ? null : instance.id)}
-                            disabled={actionLoading === instance.id}
-                            className="inline-flex items-center px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors disabled:opacity-50"
-                            title="작업 메뉴"
-                          >
-                            {actionLoading === instance.id ? (
-                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-1"></div>
-                            ) : (
-                              <Settings className="h-4 w-4 mr-1" />
-                            )}
-                            작업
-                          </button>
-                          
-                          {showActionMenu === instance.id && (
-                            <div className="absolute right-0 bottom-full mb-2 w-56 bg-white rounded-md shadow-xl border border-gray-200 py-1 z-20 max-h-64 overflow-y-auto">
-                              <button
-                                onClick={() => {
-                                  handleInstanceClick(instance.id);
-                                  setShowActionMenu(null);
-                                }}
-                                className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                              >
-                                <Eye className="h-4 w-4 mr-3" />
-                                상세 정보
-                              </button>
-                              <div className="border-t border-gray-100 my-1"></div>
-                              {instance.status === 'ACTIVE' && (
-                                <>
-                                  <button
-                                    onClick={() => {
-                                      handleInstanceAction(instance.id, 'stop');
-                                      setShowActionMenu(null);
-                                    }}
-                                    disabled={actionLoading === instance.id}
-                                    className="flex items-center w-full px-4 py-2 text-sm text-orange-600 hover:bg-orange-50 disabled:opacity-50"
-                                  >
-                                    {actionLoading === instance.id ? (
-                                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-orange-600 mr-3"></div>
-                                    ) : (
-                                      <Square className="h-4 w-4 mr-3" />
-                                    )}
-                                    인스턴스 중지
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      handleInstanceAction(instance.id, 'reboot');
-                                      setShowActionMenu(null);
-                                    }}
-                                    disabled={actionLoading === instance.id}
-                                    className="flex items-center w-full px-4 py-2 text-sm text-blue-600 hover:bg-blue-50 disabled:opacity-50"
-                                  >
-                                    {actionLoading === instance.id ? (
-                                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-3"></div>
-                                    ) : (
-                                      <RotateCcw className="h-4 w-4 mr-3" />
-                                    )}
-                                    인스턴스 재시작
-                                  </button>
-                                </>
-                              )}
-                              {instance.status === 'SHUTOFF' && (
-                                <button
-                                  onClick={() => {
-                                    handleInstanceAction(instance.id, 'start');
-                                    setShowActionMenu(null);
-                                  }}
-                                  disabled={actionLoading === instance.id}
-                                  className="flex items-center w-full px-4 py-2 text-sm text-green-600 hover:bg-green-50 disabled:opacity-50"
-                                >
-                                  {actionLoading === instance.id ? (
-                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-600 mr-3"></div>
-                                  ) : (
-                                    <Play className="h-4 w-4 mr-3" />
-                                  )}
-                                  인스턴스 시작
-                                </button>
-                              )}
-                              <div className="border-t border-gray-100 my-1"></div>
-                              <button
-                                onClick={() => {
-                                                                     // TODO: 유동 IP 설정 기능
-                                   toast('유동 IP 설정 기능은 준비중입니다.');
-                                  setShowActionMenu(null);
-                                }}
-                                className="flex items-center w-full px-4 py-2 text-sm text-purple-600 hover:bg-purple-50"
-                              >
-                                <Globe className="h-4 w-4 mr-3" />
-                                유동 IP 설정
-                              </button>
-                              <button
-                                onClick={() => {
-                                                                     // TODO: 보안 그룹 설정 기능
-                                   toast('보안 그룹 설정 기능은 준비중입니다.');
-                                  setShowActionMenu(null);
-                                }}
-                                className="flex items-center w-full px-4 py-2 text-sm text-indigo-600 hover:bg-indigo-50"
-                              >
-                                <Shield className="h-4 w-4 mr-3" />
-                                보안 그룹
-                              </button>
-                              <div className="border-t border-gray-100 my-1"></div>
-                              <button
-                                onClick={() => {
-                                  handleInstanceAction(instance.id, 'delete');
-                                  setShowActionMenu(null);
-                                }}
-                                disabled={actionLoading === instance.id}
-                                className="flex items-center w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
-                              >
-                                {actionLoading === instance.id ? (
-                                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-red-600 mr-3"></div>
-                                ) : (
-                                  <Trash2 className="h-4 w-4 mr-3" />
-                                )}
-                                인스턴스 삭제
-                              </button>
-                            </div>
-                          )}
-                        </div>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                        <button
+                          onClick={() => handleInstanceClick(instance.id)}
+                          className="inline-flex items-center px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg transition-colors"
+                          title="상세 정보"
+                        >
+                          <Eye className="h-4 w-4 mr-1" />
+                          상세 보기
+                        </button>
                       </td>
                     </tr>
                   );

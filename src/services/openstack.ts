@@ -145,6 +145,16 @@ export class NovaService extends BaseOpenStackService {
     return this.makeRequest(OPENSTACK_ENDPOINTS.NOVA, '/os-keypairs');
   }
 
+  async createKeyPair(keyPairData: { name: string; type?: string; public_key?: string }) {
+    return this.makeRequest(OPENSTACK_ENDPOINTS.NOVA, '/os-keypairs', 'POST', {
+      keypair: keyPairData
+    });
+  }
+
+  async deleteKeyPair(keyPairName: string) {
+    return this.makeRequest(OPENSTACK_ENDPOINTS.NOVA, `/os-keypairs/${keyPairName}`, 'DELETE');
+  }
+
   async createSnapshot(serverId: string, name: string) {
     return this.makeRequest(OPENSTACK_ENDPOINTS.NOVA, `/servers/${serverId}/action`, 'POST', {
       createImage: { name }

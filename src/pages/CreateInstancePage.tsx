@@ -279,7 +279,7 @@ const CreateInstancePage: React.FC = () => {
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 pb-20">
+    <div className="max-w-4xl mx-auto space-y-6 min-h-screen pb-20">
       {/* 헤더 */}
       <div className="flex items-center space-x-4">
         <button 
@@ -1003,15 +1003,33 @@ echo '<h1>Hello from OpenStack!</h1>' > /var/www/html/index.html`}
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
             <h3 className="text-lg font-medium text-gray-900 mb-4">보안그룹 생성</h3>
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
                 const formData = new FormData(e.target as HTMLFormElement);
                 const name = formData.get('sg_name') as string;
                 const description = formData.get('sg_description') as string;
                 
-                // TODO: 실제 보안그룹 생성 API 호출
-                toast.success('보안그룹이 생성되었습니다.');
-                setShowCreateSecurityGroup(false);
+                try {
+                  const newSecurityGroup = await neutronService.createSecurityGroup({
+                    security_group: {
+                      name,
+                      description: description || ''
+                    }
+                  });
+                  
+                  // 목록에 새 보안그룹 추가
+                  setSecurityGroups(prev => [...prev, newSecurityGroup.security_group]);
+                  
+                  // 폼에서 자동 선택
+                  const currentSelected = watch('security_groups');
+                  setValue('security_groups', [...currentSelected, newSecurityGroup.security_group.name]);
+                  
+                  toast.success('보안그룹이 생성되었습니다.');
+                  setShowCreateSecurityGroup(false);
+                } catch (error) {
+                  console.error('보안그룹 생성 실패:', error);
+                  toast.error('보안그룹 생성에 실패했습니다.');
+                }
               }}
             >
               <div className="space-y-4">
@@ -1065,14 +1083,42 @@ echo '<h1>Hello from OpenStack!</h1>' > /var/www/html/index.html`}
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
             <h3 className="text-lg font-medium text-gray-900 mb-4">키페어 생성</h3>
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
                 const formData = new FormData(e.target as HTMLFormElement);
                 const name = formData.get('kp_name') as string;
                 
-                // TODO: 실제 키페어 생성 API 호출
-                toast.success('키페어가 생성되었습니다.');
-                setShowCreateKeyPair(false);
+                try {
+                  const newKeyPair = await novaService.createKeyPair({
+                    name,
+                    type: 'ssh'
+                  });
+                  
+                  // 목록에 새 키페어 추가
+                  setKeyPairs(prev => [...prev, newKeyPair.keypair]);
+                  
+                  // 폼에서 자동 선택
+                  setValue('key_name', newKeyPair.keypair.name);
+                  
+                  // 개인키 다운로드
+                  if (newKeyPair.keypair.private_key) {
+                    const blob = new Blob([newKeyPair.keypair.private_key], { type: 'text/plain' });
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `${name}.pem`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                  }
+                  
+                  toast.success('키페어가 생성되고 다운로드되었습니다.');
+                  setShowCreateKeyPair(false);
+                } catch (error) {
+                  console.error('키페어 생성 실패:', error);
+                  toast.error('키페어 생성에 실패했습니다.');
+                }
               }}
             >
               <div className="space-y-4">
