@@ -1,0 +1,16 @@
+서비스	타입	엔드포인트 URL
+Keystone	http://controller:5000/v3/
+Nova	http://controller:8774/v2.1
+Neutron	http://controller:9696
+Glance	http://controller:9292
+Cinder	http://controller:8776/v3/e70a1557498a46e08839fdfb88fd9a1d
+Placement	http://controller:8778
+
+export OS_PROJECT_DOMAIN_NAME=Default
+export OS_USER_DOMAIN_NAME=Default
+export OS_PROJECT_NAME=admin
+export OS_USERNAME=admin
+export OS_PASSWORD=292747187bb383f8fe73
+export OS_AUTH_URL=http://controller:5000/v3
+export OS_IDENTITY_API_VERSION=3
+export OS_IMAGE_API_VERSION=2
