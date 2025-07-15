@@ -92,6 +92,9 @@ const CreateInstancePage: React.FC = () => {
   const [keyPairs, setKeyPairs] = useState<KeyPair[]>([]);
   const [availabilityZones, setAvailabilityZones] = useState<string[]>([]);
   const [volumeTypes, setVolumeTypes] = useState<any[]>([]);
+  const [showAllSecurityGroups, setShowAllSecurityGroups] = useState(false);
+  const [showCreateSecurityGroup, setShowCreateSecurityGroup] = useState(false);
+  const [showCreateKeyPair, setShowCreateKeyPair] = useState(false);
 
   const { control, handleSubmit, watch, setValue, formState: { errors } } = useForm<CreateInstanceForm>({
     defaultValues: {
@@ -437,8 +440,9 @@ const CreateInstancePage: React.FC = () => {
                 control={control}
                 rules={{ required: '이미지를 선택해주세요' }}
                 render={({ field }) => (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {images.map(image => (
+                  <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {images.map(image => (
                       <label key={image.id} className="relative">
                         <input
                           type="radio"
@@ -466,7 +470,8 @@ const CreateInstancePage: React.FC = () => {
                           </div>
                         </div>
                       </label>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 )}
               />
@@ -544,8 +549,9 @@ const CreateInstancePage: React.FC = () => {
                 control={control}
                 rules={{ required: '플레이버를 선택해주세요' }}
                 render={({ field }) => (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {flavors.map(flavor => (
+                  <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {flavors.map(flavor => (
                       <label key={flavor.id} className="relative">
                         <input
                           type="radio"
@@ -572,7 +578,8 @@ const CreateInstancePage: React.FC = () => {
                           </div>
                         </div>
                       </label>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 )}
               />
@@ -654,13 +661,23 @@ const CreateInstancePage: React.FC = () => {
 
             {/* 보안 그룹 */}
             <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-6">보안 그룹</h3>
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-lg font-medium text-gray-900">보안 그룹</h3>
+                <button
+                  type="button"
+                  onClick={() => setShowCreateSecurityGroup(true)}
+                  className="flex items-center px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700"
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  새로 만들기
+                </button>
+              </div>
               <Controller
                 name="security_groups"
                 control={control}
                 render={({ field }) => (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {securityGroups.map(sg => (
+                    {securityGroups.filter(sg => sg.name === 'default' || field.value.includes(sg.name)).map(sg => (
                       <label key={sg.id} className="flex items-center p-3 border border-gray-200 rounded-lg">
                         <input
                           type="checkbox"
@@ -680,6 +697,43 @@ const CreateInstancePage: React.FC = () => {
                         </div>
                       </label>
                     ))}
+                    
+                    {/* 추가 보안그룹 선택 */}
+                    {securityGroups.filter(sg => sg.name !== 'default' && !field.value.includes(sg.name)).length > 0 && (
+                      <div className="col-span-full">
+                        <button
+                          type="button"
+                          onClick={() => setShowAllSecurityGroups(!showAllSecurityGroups)}
+                          className="text-blue-600 hover:text-blue-800 text-sm"
+                        >
+                          {showAllSecurityGroups ? '간단히 보기' : `추가 보안그룹 보기 (${securityGroups.filter(sg => sg.name !== 'default' && !field.value.includes(sg.name)).length}개)`}
+                        </button>
+                        {showAllSecurityGroups && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+                            {securityGroups.filter(sg => sg.name !== 'default' && !field.value.includes(sg.name)).map(sg => (
+                              <label key={sg.id} className="flex items-center p-3 border border-gray-200 rounded-lg">
+                                <input
+                                  type="checkbox"
+                                  checked={field.value.includes(sg.name)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      field.onChange([...field.value, sg.name]);
+                                    } else {
+                                      field.onChange(field.value.filter(name => name !== sg.name));
+                                    }
+                                  }}
+                                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                />
+                                <div className="ml-3">
+                                  <p className="font-medium">{sg.name}</p>
+                                  <p className="text-sm text-gray-500 truncate">{sg.description}</p>
+                                </div>
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               />
@@ -687,7 +741,17 @@ const CreateInstancePage: React.FC = () => {
 
             {/* 키 페어 */}
             <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-6">키 페어</h3>
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-lg font-medium text-gray-900">키 페어</h3>
+                <button
+                  type="button"
+                  onClick={() => setShowCreateKeyPair(true)}
+                  className="flex items-center px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700"
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  새로 만들기
+                </button>
+              </div>
               <Controller
                 name="key_name"
                 control={control}
@@ -755,9 +819,21 @@ const CreateInstancePage: React.FC = () => {
                 render={({ field }) => (
                   <textarea
                     {...field}
-                    rows={8}
+                    rows={15}
                     className="input w-full font-mono text-sm"
-                    placeholder="#!/bin/bash&#10;echo 'Hello World' > /tmp/hello.txt"
+                    placeholder={`#!/bin/bash
+# 패키지 업데이트
+apt-get update
+
+# 웹서버 설치
+apt-get install -y apache2
+
+# 웹서버 시작
+systemctl start apache2
+systemctl enable apache2
+
+# 테스트 페이지 생성
+echo '<h1>Hello from OpenStack!</h1>' > /var/www/html/index.html`}
                   />
                 )}
               />
@@ -920,6 +996,124 @@ const CreateInstancePage: React.FC = () => {
           </div>
         </div>
       </form>
+
+      {/* 보안그룹 생성 모달 */}
+      {showCreateSecurityGroup && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-lg font-medium text-gray-900 mb-4">보안그룹 생성</h3>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target as HTMLFormElement);
+                const name = formData.get('sg_name') as string;
+                const description = formData.get('sg_description') as string;
+                
+                // TODO: 실제 보안그룹 생성 API 호출
+                toast.success('보안그룹이 생성되었습니다.');
+                setShowCreateSecurityGroup(false);
+              }}
+            >
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    이름
+                  </label>
+                  <input
+                    name="sg_name"
+                    type="text"
+                    required
+                    className="input w-full"
+                    placeholder="my-security-group"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    설명
+                  </label>
+                  <textarea
+                    name="sg_description"
+                    rows={3}
+                    className="input w-full"
+                    placeholder="보안그룹 설명"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end space-x-3 mt-6">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateSecurityGroup(false)}
+                  className="px-4 py-2 text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+                >
+                  취소
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                >
+                  생성
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 키페어 생성 모달 */}
+      {showCreateKeyPair && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-lg font-medium text-gray-900 mb-4">키페어 생성</h3>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target as HTMLFormElement);
+                const name = formData.get('kp_name') as string;
+                
+                // TODO: 실제 키페어 생성 API 호출
+                toast.success('키페어가 생성되었습니다.');
+                setShowCreateKeyPair(false);
+              }}
+            >
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    키페어 이름
+                  </label>
+                  <input
+                    name="kp_name"
+                    type="text"
+                    required
+                    className="input w-full"
+                    placeholder="my-keypair"
+                  />
+                </div>
+                <div className="bg-blue-50 p-3 rounded-lg">
+                  <p className="text-sm text-blue-700">
+                    키페어 생성 후 개인키(.pem 파일)가 자동으로 다운로드됩니다.
+                    이 파일을 안전한 곳에 보관하세요.
+                  </p>
+                </div>
+              </div>
+              <div className="flex justify-end space-x-3 mt-6">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateKeyPair(false)}
+                  className="px-4 py-2 text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+                >
+                  취소
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                >
+                  생성
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

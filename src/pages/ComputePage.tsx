@@ -578,15 +578,20 @@ const ComputePage: React.FC = () => {
                         <div className="relative">
                           <button
                             onClick={() => setShowActionMenu(showActionMenu === instance.id ? null : instance.id)}
-                            className="inline-flex items-center px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
+                            disabled={actionLoading === instance.id}
+                            className="inline-flex items-center px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors disabled:opacity-50"
                             title="작업 메뉴"
                           >
-                            <Settings className="h-4 w-4 mr-1" />
+                            {actionLoading === instance.id ? (
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-1"></div>
+                            ) : (
+                              <Settings className="h-4 w-4 mr-1" />
+                            )}
                             작업
                           </button>
                           
                           {showActionMenu === instance.id && (
-                            <div className="absolute right-0 mt-2 w-56 bg-white rounded-md shadow-xl border border-gray-200 py-1 z-20">
+                            <div className="absolute right-0 bottom-full mb-2 w-56 bg-white rounded-md shadow-xl border border-gray-200 py-1 z-20 max-h-64 overflow-y-auto">
                               <button
                                 onClick={() => {
                                   handleInstanceClick(instance.id);
@@ -605,9 +610,14 @@ const ComputePage: React.FC = () => {
                                       handleInstanceAction(instance.id, 'stop');
                                       setShowActionMenu(null);
                                     }}
-                                    className="flex items-center w-full px-4 py-2 text-sm text-orange-600 hover:bg-orange-50"
+                                    disabled={actionLoading === instance.id}
+                                    className="flex items-center w-full px-4 py-2 text-sm text-orange-600 hover:bg-orange-50 disabled:opacity-50"
                                   >
-                                    <Square className="h-4 w-4 mr-3" />
+                                    {actionLoading === instance.id ? (
+                                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-orange-600 mr-3"></div>
+                                    ) : (
+                                      <Square className="h-4 w-4 mr-3" />
+                                    )}
                                     인스턴스 중지
                                   </button>
                                   <button
@@ -615,9 +625,14 @@ const ComputePage: React.FC = () => {
                                       handleInstanceAction(instance.id, 'reboot');
                                       setShowActionMenu(null);
                                     }}
-                                    className="flex items-center w-full px-4 py-2 text-sm text-blue-600 hover:bg-blue-50"
+                                    disabled={actionLoading === instance.id}
+                                    className="flex items-center w-full px-4 py-2 text-sm text-blue-600 hover:bg-blue-50 disabled:opacity-50"
                                   >
-                                    <RotateCcw className="h-4 w-4 mr-3" />
+                                    {actionLoading === instance.id ? (
+                                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-3"></div>
+                                    ) : (
+                                      <RotateCcw className="h-4 w-4 mr-3" />
+                                    )}
                                     인스턴스 재시작
                                   </button>
                                 </>
@@ -628,9 +643,14 @@ const ComputePage: React.FC = () => {
                                     handleInstanceAction(instance.id, 'start');
                                     setShowActionMenu(null);
                                   }}
-                                  className="flex items-center w-full px-4 py-2 text-sm text-green-600 hover:bg-green-50"
+                                  disabled={actionLoading === instance.id}
+                                  className="flex items-center w-full px-4 py-2 text-sm text-green-600 hover:bg-green-50 disabled:opacity-50"
                                 >
-                                  <Play className="h-4 w-4 mr-3" />
+                                  {actionLoading === instance.id ? (
+                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-600 mr-3"></div>
+                                  ) : (
+                                    <Play className="h-4 w-4 mr-3" />
+                                  )}
                                   인스턴스 시작
                                 </button>
                               )}
@@ -663,9 +683,14 @@ const ComputePage: React.FC = () => {
                                   handleInstanceAction(instance.id, 'delete');
                                   setShowActionMenu(null);
                                 }}
-                                className="flex items-center w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50"
+                                disabled={actionLoading === instance.id}
+                                className="flex items-center w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50 disabled:opacity-50"
                               >
-                                <Trash2 className="h-4 w-4 mr-3" />
+                                {actionLoading === instance.id ? (
+                                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-red-600 mr-3"></div>
+                                ) : (
+                                  <Trash2 className="h-4 w-4 mr-3" />
+                                )}
                                 인스턴스 삭제
                               </button>
                             </div>
