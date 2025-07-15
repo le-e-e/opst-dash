@@ -6,6 +6,8 @@ import LoginPage from './components/LoginPage';
 import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import ComputePage from './pages/ComputePage';
+import InstanceDetailPage from './pages/InstanceDetailPage';
+import CreateInstancePage from './pages/CreateInstancePage';
 import NetworkPage from './pages/NetworkPage';
 import VolumePage from './pages/VolumePage';
 import ImagesPage from './pages/ImagesPage';
@@ -61,6 +63,8 @@ const App: React.FC = () => {
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="compute" element={<ComputePage />} />
+            <Route path="compute/create" element={<CreateInstancePage />} />
+            <Route path="compute/:instanceId" element={<InstanceDetailPage />} />
             <Route path="network" element={<NetworkPage />} />
             <Route path="volume" element={<VolumePage />} />
             <Route path="images" element={<ImagesPage />} />

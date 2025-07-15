@@ -25,7 +25,7 @@ const Layout: React.FC = () => {
 
   const navigation = [
     { name: '대시보드', href: '/dashboard', icon: Home },
-    { name: '컴퓨트', href: '/compute', icon: Server },
+    { name: '가상머신', href: '/compute', icon: Server },
     { name: '네트워크', href: '/network', icon: Network },
     { name: '볼륨', href: '/volume', icon: HardDrive },
     { name: '이미지', href: '/images', icon: Image },
