@@ -93,7 +93,7 @@ const CreateInstancePage: React.FC = () => {
   const [keyPairs, setKeyPairs] = useState<KeyPair[]>([]);
   const [availabilityZones, setAvailabilityZones] = useState<string[]>([]);
   const [volumeTypes, setVolumeTypes] = useState<any[]>([]);
-  const [showAllSecurityGroups, setShowAllSecurityGroups] = useState(false);
+
   const [showCreateSecurityGroup, setShowCreateSecurityGroup] = useState(false);
   const [showCreateKeyPair, setShowCreateKeyPair] = useState(false);
 
@@ -145,8 +145,12 @@ const CreateInstancePage: React.FC = () => {
       setAvailabilityZones(availabilityZonesData.availabilityZoneInfo?.map((az: any) => az.zoneName) || ['nova']);
       setVolumeTypes(volumeTypesData.volume_types || []);
 
-      // 기본값 설정
-      if (networksData.networks?.length > 0) {
+      // internal-net 찾아서 기본 네트워크로 설정
+      const internalNet = networksData.networks?.find((net: any) => net.name === 'internal-net');
+      if (internalNet) {
+        setValue('networks', [{ uuid: internalNet.id }]);
+      } else if (networksData.networks?.length > 0) {
+        // internal-net이 없으면 첫 번째 네트워크 사용
         setValue('networks', [{ uuid: networksData.networks[0].id }]);
       }
       if (availabilityZonesData.availabilityZoneInfo?.length > 0) {
@@ -217,36 +221,67 @@ const CreateInstancePage: React.FC = () => {
       
       // 유동 IP 자동 할당
       if (data.auto_assign_floating_ip && response.server?.id) {
-        try {
-          // 잠시 대기 후 유동 IP 할당 (인스턴스가 생성될 시간)
-          setTimeout(async () => {
-            try {
-                             // 유동 IP 목록 가져오기
-               const floatingIPs = await neutronService.getFloatingIps();
-              const availableIP = floatingIPs.floatingips?.find((fip: any) => !fip.port_id);
+        // 백그라운드에서 유동 IP 할당 처리
+        (async () => {
+          try {
+            // 인스턴스가 ACTIVE 상태가 될 때까지 대기
+            let attempts = 0;
+            const maxAttempts = 30; // 최대 5분 대기
+            
+            while (attempts < maxAttempts) {
+              await new Promise(resolve => setTimeout(resolve, 10000)); // 10초 대기
               
-              if (availableIP) {
-                // 기존 유동 IP 연결
-                await novaService.attachFloatingIP(response.server.id, availableIP.floating_ip_address);
-                toast.success('유동 IP가 자동으로 할당되었습니다.');
-              } else {
-                // 새로운 유동 IP 생성 및 연결
-                const newFloatingIP = await neutronService.createFloatingIP({
-                  floating_network_id: 'public' // 기본 공용 네트워크 사용
-                });
-                if (newFloatingIP.floatingip) {
-                  await novaService.attachFloatingIP(response.server.id, newFloatingIP.floatingip.floating_ip_address);
-                  toast.success('새로운 유동 IP가 생성되고 할당되었습니다.');
+              try {
+                const serverStatus = await novaService.getServer(response.server.id);
+                if (serverStatus.server.status === 'ACTIVE') {
+                  // 먼저 사용 가능한 유동 IP 찾기
+                  const floatingIPs = await neutronService.getFloatingIps();
+                  const availableIP = floatingIPs.floatingips?.find((fip: any) => !fip.port_id);
+                  
+                  let floatingIPAddress = '';
+                  
+                  if (availableIP) {
+                    floatingIPAddress = availableIP.floating_ip_address;
+                  } else {
+                    // 새로운 유동 IP 생성
+                    const networks = await neutronService.getNetworks();
+                    const externalNetwork = networks.networks?.find((net: any) => 
+                      net['router:external'] === true || net.name.includes('external') || net.name.includes('public')
+                    );
+                    
+                    if (externalNetwork) {
+                      const newFloatingIP = await neutronService.createFloatingIP({
+                        floating_network_id: externalNetwork.id
+                      });
+                      if (newFloatingIP.floatingip) {
+                        floatingIPAddress = newFloatingIP.floatingip.floating_ip_address;
+                      }
+                    }
+                  }
+                  
+                  if (floatingIPAddress) {
+                    await novaService.attachFloatingIP(response.server.id, floatingIPAddress);
+                    toast.success(`유동 IP ${floatingIPAddress}가 자동으로 할당되었습니다.`);
+                  } else {
+                    toast.error('유동 IP 할당에 실패했습니다: 외부 네트워크를 찾을 수 없습니다.');
+                  }
+                  break;
                 }
+              } catch (checkError) {
+                console.error('인스턴스 상태 확인 실패:', checkError);
               }
-            } catch (ipError) {
-              console.error('유동 IP 할당 실패:', ipError);
-              toast.error('유동 IP 할당에 실패했습니다.');
+              
+              attempts++;
             }
-          }, 10000); // 10초 후 유동 IP 할당
-        } catch (ipError) {
-          console.error('유동 IP 할당 실패:', ipError);
-        }
+            
+            if (attempts >= maxAttempts) {
+              toast.error('유동 IP 할당 시간이 초과되었습니다.');
+            }
+          } catch (ipError) {
+            console.error('유동 IP 할당 실패:', ipError);
+            toast.error('유동 IP 할당에 실패했습니다.');
+          }
+        })();
       }
       
       toast.success('가상머신 생성이 시작되었습니다!');
@@ -259,15 +294,7 @@ const CreateInstancePage: React.FC = () => {
     }
   };
 
-  const addNetwork = () => {
-    const currentNetworks = watch('networks');
-    setValue('networks', [...currentNetworks, { uuid: '' }]);
-  };
 
-  const removeNetwork = (index: number) => {
-    const currentNetworks = watch('networks');
-    setValue('networks', currentNetworks.filter((_, i) => i !== index));
-  };
 
   const addMetadata = () => {
     const currentMetadata = watch('metadata');
@@ -627,65 +654,22 @@ const CreateInstancePage: React.FC = () => {
           <div className="space-y-6">
             {/* 네트워크 설정 */}
             <div className="bg-white rounded-lg shadow p-6">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-lg font-medium text-gray-900">네트워크 설정</h3>
-                <button
-                  type="button"
-                  onClick={addNetwork}
-                  className="flex items-center px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
-                >
-                  <Plus className="h-4 w-4 mr-1" />
-                  네트워크 추가
-                </button>
-              </div>
+              <h3 className="text-lg font-medium text-gray-900 mb-6">네트워크 설정</h3>
               
               <Controller
                 name="networks"
                 control={control}
                 render={({ field }) => (
                   <div className="space-y-4">
-                    {field.value.map((network, index) => (
-                      <div key={index} className="flex items-center space-x-4 p-4 border border-gray-200 rounded-lg">
-                        <div className="flex-1">
-                          <select
-                            value={network.uuid}
-                            onChange={(e) => {
-                              const newNetworks = [...field.value];
-                              newNetworks[index].uuid = e.target.value;
-                              field.onChange(newNetworks);
-                            }}
-                            className="input w-full"
-                          >
-                            <option value="">네트워크 선택</option>
-                            {networks.map(net => (
-                              <option key={net.id} value={net.id}>{net.name}</option>
-                            ))}
-                          </select>
+                    <div className="p-4 border border-gray-200 rounded-lg bg-gray-50">
+                      <div className="flex items-center">
+                        <Network className="h-5 w-5 text-gray-400 mr-3" />
+                        <div>
+                          <p className="font-medium text-gray-900">internal-net</p>
+                          <p className="text-sm text-gray-500">기본 내부 네트워크 (자동 IP 할당)</p>
                         </div>
-                        <div className="flex-1">
-                          <input
-                            type="text"
-                            placeholder="고정 IP (선택사항)"
-                            value={network.fixed_ip || ''}
-                            onChange={(e) => {
-                              const newNetworks = [...field.value];
-                              newNetworks[index].fixed_ip = e.target.value;
-                              field.onChange(newNetworks);
-                            }}
-                            className="input w-full"
-                          />
-                        </div>
-                        {field.value.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => removeNetwork(index)}
-                            className="p-2 text-red-600 hover:text-red-800"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        )}
                       </div>
-                    ))}
+                    </div>
                   </div>
                 )}
               />
@@ -731,17 +715,17 @@ const CreateInstancePage: React.FC = () => {
                 control={control}
                 render={({ field }) => (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {securityGroups.filter((sg, index) => 
-                      (sg.name === 'default' && securityGroups.findIndex(s => s.name === 'default') === index) || 
-                      (sg.name !== 'default' && field.value.includes(sg.name))
-                    ).map(sg => (
-                      <label key={sg.id} className="flex items-center p-3 border border-gray-200 rounded-lg">
+                    {securityGroups.map(sg => (
+                      <label key={sg.id} className="flex items-center p-3 border border-gray-200 rounded-lg hover:bg-gray-50">
                         <input
                           type="checkbox"
                           checked={field.value.includes(sg.name)}
                           onChange={(e) => {
                             if (e.target.checked) {
-                              field.onChange([...field.value, sg.name]);
+                              // 중복 선택 방지
+                              if (!field.value.includes(sg.name)) {
+                                field.onChange([...field.value, sg.name]);
+                              }
                             } else {
                               field.onChange(field.value.filter(name => name !== sg.name));
                             }
@@ -754,43 +738,6 @@ const CreateInstancePage: React.FC = () => {
                         </div>
                       </label>
                     ))}
-                    
-                    {/* 추가 보안그룹 선택 */}
-                    {securityGroups.filter(sg => sg.name !== 'default' && !field.value.includes(sg.name)).length > 0 && (
-                      <div className="col-span-full">
-                        <button
-                          type="button"
-                          onClick={() => setShowAllSecurityGroups(!showAllSecurityGroups)}
-                          className="text-blue-600 hover:text-blue-800 text-sm"
-                        >
-                          {showAllSecurityGroups ? '간단히 보기' : `추가 보안그룹 보기 (${securityGroups.filter(sg => sg.name !== 'default' && !field.value.includes(sg.name)).length}개)`}
-                        </button>
-                        {showAllSecurityGroups && (
-                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
-                            {securityGroups.filter(sg => sg.name !== 'default' && !field.value.includes(sg.name)).map(sg => (
-                              <label key={sg.id} className="flex items-center p-3 border border-gray-200 rounded-lg">
-                                <input
-                                  type="checkbox"
-                                  checked={field.value.includes(sg.name)}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      field.onChange([...field.value, sg.name]);
-                                    } else {
-                                      field.onChange(field.value.filter(name => name !== sg.name));
-                                    }
-                                  }}
-                                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                />
-                                <div className="ml-3">
-                                  <p className="font-medium">{sg.name}</p>
-                                  <p className="text-sm text-gray-500 truncate">{sg.description}</p>
-                                </div>
-                              </label>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
                 )}
               />
@@ -1150,10 +1097,26 @@ echo '<h1>Hello from OpenStack!</h1>' > /var/www/html/index.html`}
                 const name = formData.get('kp_name') as string;
                 
                 try {
+                  // 키페어 이름 유효성 검사
+                  if (!name || name.trim() === '') {
+                    toast.error('키페어 이름을 입력해주세요.');
+                    return;
+                  }
+                  
+                  // 중복 키페어 이름 검사
+                  if (keyPairs.some(kp => kp.name === name)) {
+                    toast.error('이미 존재하는 키페어 이름입니다.');
+                    return;
+                  }
+                  
                   const newKeyPair = await novaService.createKeyPair({
-                    name,
+                    name: name.trim(),
                     type: 'ssh'
                   });
+                  
+                  if (!newKeyPair || !newKeyPair.keypair) {
+                    throw new Error('키페어 생성 응답이 올바르지 않습니다.');
+                  }
                   
                   // 목록에 새 키페어 추가
                   setKeyPairs(prev => [...prev, newKeyPair.keypair]);
@@ -1172,13 +1135,26 @@ echo '<h1>Hello from OpenStack!</h1>' > /var/www/html/index.html`}
                     a.click();
                     window.URL.revokeObjectURL(url);
                     document.body.removeChild(a);
+                    
+                    toast.success('키페어가 생성되고 다운로드되었습니다.');
+                  } else {
+                    toast.success('키페어가 생성되었습니다.');
                   }
                   
-                  toast.success('키페어가 생성되고 다운로드되었습니다.');
                   setShowCreateKeyPair(false);
-                } catch (error) {
+                } catch (error: any) {
                   console.error('키페어 생성 실패:', error);
-                  toast.error('키페어 생성에 실패했습니다.');
+                  
+                  let errorMessage = '키페어 생성에 실패했습니다.';
+                  if (error?.response?.status === 409) {
+                    errorMessage = '이미 존재하는 키페어 이름입니다.';
+                  } else if (error?.response?.status === 400) {
+                    errorMessage = '키페어 이름이 올바르지 않습니다.';
+                  } else if (error?.message) {
+                    errorMessage = `키페어 생성 실패: ${error.message}`;
+                  }
+                  
+                  toast.error(errorMessage);
                 }
               }}
             >

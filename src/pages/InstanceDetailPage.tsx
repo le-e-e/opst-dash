@@ -283,7 +283,7 @@ const InstanceDetailPage: React.FC = () => {
           </span>
         </div>
         
-        <div className="flex items-center space-x-3">
+        <div className="flex items-center flex-wrap gap-3">
           <button
             onClick={fetchInstanceDetail}
             className="flex items-center px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
@@ -330,6 +330,32 @@ const InstanceDetailPage: React.FC = () => {
           >
             <RotateCcw className="h-4 w-4 mr-2" />
             재시작
+          </button>
+          
+          <button
+            onClick={() => handleAction('snapshot')}
+            disabled={actionLoading || instance.status !== 'ACTIVE'}
+            className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
+          >
+            <Camera className="h-4 w-4 mr-2" />
+            스냅샷
+          </button>
+          
+          <button
+            onClick={handleGetConsoleLogs}
+            className="flex items-center px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+          >
+            <FileText className="h-4 w-4 mr-2" />
+            콘솔 로그
+          </button>
+          
+          <button
+            onClick={() => handleAction('delete')}
+            disabled={actionLoading}
+            className="flex items-center px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            삭제
           </button>
         </div>
       </div>
@@ -716,37 +742,7 @@ const InstanceDetailPage: React.FC = () => {
         </div>
       )}
 
-      {/* 액션 버튼 */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h3 className="text-lg font-medium text-gray-900 mb-4">인스턴스 작업</h3>
-        <div className="flex flex-wrap gap-3">
-          <button
-            onClick={() => handleAction('snapshot')}
-            disabled={actionLoading || instance.status !== 'ACTIVE'}
-            className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
-          >
-            <Camera className="h-4 w-4 mr-2" />
-            스냅샷 생성
-          </button>
-          
-          <button
-            onClick={handleGetConsoleLogs}
-            className="flex items-center px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
-          >
-            <FileText className="h-4 w-4 mr-2" />
-            콘솔 로그
-          </button>
-          
-          <button
-            onClick={() => handleAction('delete')}
-            disabled={actionLoading}
-            className="flex items-center px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
-          >
-            <Trash2 className="h-4 w-4 mr-2" />
-            인스턴스 삭제
-          </button>
-        </div>
-      </div>
+
     </div>
   );
 };
