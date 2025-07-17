@@ -24,7 +24,7 @@ import {
   X
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { novaService, neutronService, glanceService } from '../services/openstack';
+import { novaService, neutronService, glanceService, cinderService } from '../services/openstack';
 import toast from 'react-hot-toast';
 
 interface Instance {
@@ -263,22 +263,27 @@ const ComputePage: React.FC = () => {
     try {
       setBulkActionLoading(true);
       
-      const promises = validInstances.map(instance => {
-        switch (action) {
-          case 'start':
-            return novaService.startServer(instance.id);
-          case 'stop':
-            return novaService.stopServer(instance.id);
-          case 'reboot':
-            return novaService.rebootServer(instance.id);
-          case 'delete':
-            return novaService.deleteServer(instance.id);
-          default:
-            return Promise.resolve();
+      if (action === 'delete') {
+        // 삭제는 강력한 볼륨 분리 로직을 사용
+        for (const instance of validInstances) {
+          await handleDelete(instance.id);
         }
-      });
+      } else {
+        const promises = validInstances.map(instance => {
+          switch (action) {
+            case 'start':
+              return novaService.startServer(instance.id);
+            case 'stop':
+              return novaService.stopServer(instance.id);
+            case 'reboot':
+              return novaService.rebootServer(instance.id);
+            default:
+              return Promise.resolve();
+          }
+        });
 
-      await Promise.all(promises);
+        await Promise.all(promises);
+      }
       
       const actionNames = {
         start: '시작',
@@ -318,15 +323,289 @@ const ComputePage: React.FC = () => {
   };
 
   const handleDelete = async (instanceId: string) => {
-    if (!confirm('정말로 이 인스턴스를 삭제하시겠습니까?')) return;
-    
     try {
+      console.log(`\n🚀 인스턴스 ${instanceId} 삭제 프로세스 시작`);
+      
+      // 인스턴스 상세 정보와 볼륨 정보 가져오기
+      const [instanceData, volumesData] = await Promise.all([
+        novaService.getServer(instanceId),
+        cinderService.getVolumes()
+      ]);
+
+      const instance = instanceData.server;
+      const allVolumes = volumesData.volumes || [];
+      
+      console.log(`📋 인스턴스 정보: ${instance.name} (${instance.status})`);
+      console.log(`📋 인스턴스 상세:`, {
+        image: instance.image,
+        volumes_attached: instance.volumes_attached,
+        has_image: !!instance.image?.id,
+        boot_type: instance.image?.id ? 'Image Boot' : 'Volume Boot'
+      });
+      
+      // 방법 1: Nova API에서 volumes_attached 확인
+      let volumesToCheck = [];
+      const attachedVolumes = instance.volumes_attached || [];
+      
+      // 방법 2: Cinder API에서 해당 인스턴스에 연결된 모든 볼륨 찾기
+      const connectedVolumes = allVolumes.filter((vol: any) => {
+        // attachments 배열에서 이 인스턴스 ID를 가진 볼륨 찾기
+        return vol.attachments && vol.attachments.some((att: any) => att.server_id === instanceId);
+      });
+      
+      console.log(`🔍 Nova API volumes_attached:`, attachedVolumes);
+      console.log(`🔍 Cinder API connected volumes:`, connectedVolumes.map((v: any) => ({
+        id: v.id,
+        name: v.name,
+        size: v.size,
+        status: v.status,
+        attachments: v.attachments
+      })));
+      
+      // 두 방법으로 찾은 볼륨을 합치기 (중복 제거)
+      const allFoundVolumes = new Map();
+      
+      // Nova API 결과 추가
+      attachedVolumes.forEach((vol: any) => {
+        const volumeInfo = allVolumes.find((v: any) => v.id === vol.id);
+        allFoundVolumes.set(vol.id, {
+          id: vol.id,
+          name: volumeInfo?.name || vol.id,
+          size: volumeInfo?.size || 0,
+          device: vol.device,
+          source: 'nova_api',
+          volumeInfo: volumeInfo
+        });
+      });
+      
+      // Cinder API 결과 추가 (더 포괄적)
+      connectedVolumes.forEach((vol: any) => {
+        const attachment = vol.attachments.find((att: any) => att.server_id === instanceId);
+        allFoundVolumes.set(vol.id, {
+          id: vol.id,
+          name: vol.name || vol.id,
+          size: vol.size || 0,
+          device: attachment?.device || 'unknown',
+          source: allFoundVolumes.has(vol.id) ? 'both_apis' : 'cinder_api',
+          volumeInfo: vol
+        });
+      });
+      
+      volumesToCheck = Array.from(allFoundVolumes.values());
+      
+      console.log(`🔗 최종 연결된 볼륨 개수: ${volumesToCheck.length}`);
+      volumesToCheck.forEach((vol: any, idx: number) => {
+        console.log(`  ${idx + 1}. ${vol.name} (${vol.size}GB, ${vol.device}) [${vol.source}]`);
+      });
+
+      let deleteVolumes = false;
+      
+      if (volumesToCheck.length > 0) {
+        const volumeList = volumesToCheck.map((v: any) => `- ${v.name} (${v.size}GB, ${v.device})`).join('\n');
+        const confirmMessage = `인스턴스와 연결된 볼륨이 있습니다:\n\n${volumeList}\n\n어떻게 처리하시겠습니까?`;
+        
+        // 볼륨 처리 방법 선택
+        const choice = prompt(confirmMessage + '\n\n1: 볼륨도 함께 삭제\n2: 인스턴스만 삭제 (볼륨 보존)\n3: 취소\n\n번호를 입력하세요 (1, 2, 3):');
+        
+        if (!choice || choice === '3') {
+          console.log('❌ 사용자가 삭제를 취소했습니다.');
+          return;
+        }
+        
+        if (choice === '1') {
+          deleteVolumes = true;
+          console.log('✅ 볼륨도 함께 삭제하기로 선택');
+        } else if (choice === '2') {
+          deleteVolumes = false;
+          console.log('✅ 인스턴스만 삭제하고 볼륨 보존하기로 선택');
+        } else {
+          toast.error('잘못된 선택입니다. 삭제가 취소되었습니다.');
+          return;
+        }
+      } else {
+        if (!confirm('정말로 이 인스턴스를 삭제하시겠습니까?')) {
+          console.log('❌ 사용자가 삭제를 취소했습니다.');
+          return;
+        }
+        console.log('✅ 연결된 볼륨이 없으므로 바로 삭제 진행');
+      }
+      
       setActionLoading(instanceId);
+      
+      // 강력한 볼륨 분리 로직
+      if (volumesToCheck.length > 0) {
+        console.log('\n🔧 ===== 볼륨 분리 프로세스 시작 =====');
+        
+        const detachVolumeSafely = async (vol: any, index: number) => {
+          console.log(`\n📀 [${index + 1}/${volumesToCheck.length}] 볼륨 분리: ${vol.name} (${vol.id})`);
+          
+          // 현재 볼륨 상태 확인
+          const initialStatus = await cinderService.checkVolumeStatus(vol.id);
+          console.log(`   현재 상태: ${initialStatus?.status}, 연결 상태: ${initialStatus?.attach_status}, 연결 수: ${initialStatus?.attachments?.length || 0}`);
+          
+          // 이미 분리된 상태면 스킵
+          if (initialStatus?.status === 'available' && initialStatus?.attachments?.length === 0) {
+            console.log(`   ✅ 이미 분리된 상태입니다.`);
+            return true;
+          }
+          
+          let success = false;
+          
+          try {
+            // 방법 1: Nova API를 통한 일반 분리
+            console.log(`   🔄 방법 1: Nova API 일반 분리 시도...`);
+            await cinderService.detachVolume(instanceId, vol.id);
+            
+            // 분리 완료 대기 (최대 15초)
+            try {
+              await cinderService.waitForVolumeDetached(vol.id, 15);
+              console.log(`   ✅ 방법 1 성공: Nova API 일반 분리 완료`);
+              success = true;
+            } catch (waitError) {
+              console.log(`   ⚠️ 방법 1 실패: 분리 대기 타임아웃`);
+            }
+            
+          } catch (normalDetachError) {
+            console.log(`   ⚠️ 방법 1 실패: Nova API 분리 오류 - ${normalDetachError instanceof Error ? normalDetachError.message : String(normalDetachError)}`);
+          }
+          
+          if (!success) {
+            try {
+              // 방법 2: Cinder API 강제 분리
+              console.log(`   🔄 방법 2: Cinder API 강제 분리 시도...`);
+              await cinderService.forceDetachVolume(vol.id);
+              
+              // 강제 분리 완료 대기 (최대 10초)
+              try {
+                await cinderService.waitForVolumeDetached(vol.id, 10);
+                console.log(`   ✅ 방법 2 성공: Cinder API 강제 분리 완료`);
+                success = true;
+              } catch (waitError) {
+                console.log(`   ⚠️ 방법 2 실패: 강제 분리 대기 타임아웃`);
+              }
+              
+            } catch (forceDetachError) {
+              console.log(`   ⚠️ 방법 2 실패: Cinder API 강제 분리 오류 - ${forceDetachError instanceof Error ? forceDetachError.message : String(forceDetachError)}`);
+            }
+          }
+          
+          if (!success) {
+            try {
+              // 방법 3: 모든 attachment 개별 정리
+              console.log(`   🔄 방법 3: 모든 attachment 개별 정리 시도...`);
+              await cinderService.clearAllAttachments(vol.id);
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              
+              const statusAfterClear = await cinderService.checkVolumeStatus(vol.id);
+              if (statusAfterClear?.attachments?.length === 0) {
+                console.log(`   ✅ 방법 3 성공: attachment 정리 완료`);
+                success = true;
+              } else {
+                console.log(`   ⚠️ 방법 3 부분 성공: 일부 attachment가 남아있음`);
+              }
+              
+            } catch (clearError) {
+              console.log(`   ⚠️ 방법 3 실패: attachment 정리 오류 - ${clearError instanceof Error ? clearError.message : String(clearError)}`);
+            }
+          }
+          
+          if (!success) {
+            try {
+              // 방법 4: 볼륨 상태 강제 리셋 (최후 수단)
+              console.log(`   🔄 방법 4: 볼륨 상태 강제 리셋 시도...`);
+              await cinderService.forceResetVolumeState(vol.id, 'available');
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              
+              const finalStatus = await cinderService.checkVolumeStatus(vol.id);
+              console.log(`   📊 방법 4 완료: 최종 상태 ${finalStatus?.status}`);
+              
+              if (finalStatus?.status === 'available') {
+                console.log(`   ✅ 방법 4 성공: 상태 리셋 완료`);
+                success = true;
+              } else {
+                console.log(`   ⚠️ 방법 4 실패: 상태가 available로 변경되지 않음`);
+              }
+              
+            } catch (resetError) {
+              console.log(`   ❌ 방법 4 실패: 상태 리셋 오류 - ${resetError instanceof Error ? resetError.message : String(resetError)}`);
+            }
+          }
+          
+          const finalStatus = await cinderService.checkVolumeStatus(vol.id);
+          console.log(`   📊 최종 결과: ${finalStatus?.status}, 연결 수: ${finalStatus?.attachments?.length || 0}`);
+          
+          return success;
+        };
+        
+        // 모든 볼륨에 대해 순차적으로 안전한 분리 시도
+        let totalSuccess = 0;
+        for (let i = 0; i < volumesToCheck.length; i++) {
+          const vol = volumesToCheck[i];
+          const success = await detachVolumeSafely(vol, i);
+          if (success) totalSuccess++;
+        }
+        
+        console.log(`\n📊 볼륨 분리 결과: ${totalSuccess}/${volumesToCheck.length}개 성공`);
+        
+        // 추가 안정화 대기
+        console.log('⏳ 인스턴스 삭제 전 5초 안정화 대기...');
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+      
+      // 인스턴스 삭제
+      console.log('\n🗑️ 인스턴스 삭제 시작...');
       await novaService.deleteServer(instanceId);
-      toast.success('인스턴스를 삭제했습니다.');
+      console.log('✅ 인스턴스 삭제 완료');
+      
+      // 볼륨 삭제 (사용자가 선택한 경우)
+      if (deleteVolumes && volumesToCheck.length > 0) {
+        toast.loading('인스턴스 삭제 완료. 볼륨 삭제 대기 중...');
+        
+        // 인스턴스가 완전히 삭제될 때까지 충분히 대기
+        setTimeout(async () => {
+          try {
+            console.log('\n🗑️ 볼륨 삭제 프로세스 시작...');
+            
+            const volumeDeletePromises = volumesToCheck.map(async (vol: any, index: number) => {
+              try {
+                console.log(`📀 [${index + 1}/${volumesToCheck.length}] 볼륨 삭제: ${vol.name}`);
+                
+                // 볼륨 삭제 전 상태 한번 더 확인
+                const status = await cinderService.checkVolumeStatus(vol.id);
+                if (status && status.attachments.length > 0) {
+                  console.log(`   ⚠️ 볼륨이 여전히 연결되어 있음. 최종 분리 시도...`);
+                  await cinderService.forceDetachVolume(vol.id);
+                  await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+                
+                await cinderService.deleteVolume(vol.id);
+                console.log(`   ✅ 볼륨 ${vol.name} 삭제 완료`);
+              } catch (error) {
+                console.error(`   ❌ 볼륨 ${vol.name} 삭제 실패:`, error);
+                toast.error(`볼륨 ${vol.name} 삭제에 실패했습니다.`);
+              }
+            });
+            
+            await Promise.allSettled(volumeDeletePromises);
+            toast.dismiss(); // 로딩 토스트 제거
+            toast.success('인스턴스와 볼륨을 삭제했습니다.');
+            console.log('🎉 모든 삭제 프로세스 완료');
+          } catch (error) {
+            toast.dismiss();
+            toast.error('볼륨 삭제 중 오류가 발생했습니다.');
+            console.error('❌ 볼륨 삭제 프로세스 실패:', error);
+          }
+        }, 10000); // 10초 대기 (더 충분한 시간)
+        
+        toast.success('인스턴스를 삭제했습니다. 볼륨 삭제 중...');
+      } else {
+        toast.success('인스턴스를 삭제했습니다.');
+        console.log('🎉 인스턴스 삭제 프로세스 완료');
+      }
+      
       fetchInstances();
     } catch (error) {
-      console.error('삭제 실패:', error);
+      console.error('❌ 삭제 프로세스 실패:', error);
       toast.error('인스턴스 삭제에 실패했습니다.');
     } finally {
       setActionLoading(null);
@@ -339,11 +618,78 @@ const ComputePage: React.FC = () => {
 
     try {
       setActionLoading(instanceId);
-      await novaService.createSnapshot(instanceId, name);
-      toast.success('스냅샷을 생성했습니다.');
-    } catch (error) {
+      
+      // 인스턴스 상세 정보 가져오기
+      const instanceDetail = await novaService.getServer(instanceId);
+      const instance = instanceDetail.server;
+      
+      console.log('인스턴스 부팅 정보:', {
+        image: instance.image,
+        volumes_attached: instance.volumes_attached,
+        has_image: !!instance.image?.id
+      });
+      
+      // 부팅 방식 확인
+      const isImageBoot = !!instance.image?.id;
+      const hasAttachedVolumes = instance.volumes_attached && instance.volumes_attached.length > 0;
+      
+      if (isImageBoot) {
+        // 이미지 부팅: Nova 이미지 스냅샷 생성
+        console.log('이미지 부팅 인스턴스 - Nova 스냅샷 생성');
+        await novaService.createSnapshot(instanceId, name);
+        toast.success('이미지 스냅샷을 생성했습니다. 볼륨 탭에서 확인할 수 있습니다.');
+        console.log('✅ 이미지 스냅샷 생성 완료 (Nova):', {
+          instanceName: instance.name,
+          snapshotName: name,
+          type: 'image'
+        });
+      } else if (hasAttachedVolumes) {
+        // 볼륨 부팅: 부트 볼륨의 Cinder 스냅샷 생성
+        console.log('볼륨 부팅 인스턴스 - Cinder 볼륨 스냅샷 생성');
+        
+        // 부트 볼륨 찾기 (첫 번째 볼륨이 일반적으로 부트 볼륨)
+        const bootVolumeId = instance.volumes_attached[0].id;
+        
+        // 볼륨 스냅샷 생성
+        await cinderService.createSnapshot({
+          snapshot: {
+            name: name,
+            volume_id: bootVolumeId,
+            description: `${instance.name} 인스턴스의 볼륨 스냅샷`,
+            force: true // 사용 중인 볼륨도 스냅샷 생성 가능
+          }
+        });
+        
+        toast.success('볼륨 스냅샷을 생성했습니다. 볼륨 탭에서 확인할 수 있습니다.');
+        console.log('✅ 볼륨 스냅샷 생성 완료 (Cinder):', {
+          instanceName: instance.name,
+          snapshotName: name,
+          bootVolumeId: bootVolumeId,
+          type: 'volume'
+        });
+      } else {
+        // 부팅 방식을 확인할 수 없는 경우
+        console.warn('부팅 방식을 확인할 수 없습니다. 기본 Nova 스냅샷 시도');
+        await novaService.createSnapshot(instanceId, name);
+        toast.success('이미지 스냅샷을 생성했습니다. 볼륨 탭에서 확인할 수 있습니다.');
+        console.log('✅ 기본 이미지 스냅샷 생성 완료 (Nova):', {
+          instanceName: instance.name,
+          snapshotName: name,
+          type: 'image'
+        });
+      }
+      
+    } catch (error: any) {
       console.error('스냅샷 생성 실패:', error);
-      toast.error('스냅샷 생성에 실패했습니다.');
+      
+      let errorMessage = '스냅샷 생성에 실패했습니다.';
+      if (error.response?.data?.badRequest?.message) {
+        errorMessage = `스냅샷 생성 실패: ${error.response.data.badRequest.message}`;
+      } else if (error.message) {
+        errorMessage = `스냅샷 생성 실패: ${error.message}`;
+      }
+      
+      toast.error(errorMessage);
     } finally {
       setActionLoading(null);
     }

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Network, Plus, Trash2, RefreshCw, Globe, Shield, Router } from 'lucide-react';
+import { Network, RefreshCw, Globe, Shield, Router, Plus, Trash2, Edit, Eye, AlertTriangle, Settings } from 'lucide-react';
 import { neutronService } from '../services/openstack';
 import toast from 'react-hot-toast';
 
@@ -13,25 +13,101 @@ interface NetworkResource {
   created_at?: string;
 }
 
+interface SecurityGroup {
+  id: string;
+  name: string;
+  description: string;
+  rules: SecurityGroupRule[];
+  tenant_id: string;
+}
+
+interface SecurityGroupRule {
+  id: string;
+  direction: 'ingress' | 'egress';
+  ethertype: 'IPv4' | 'IPv6';
+  protocol: string | null;
+  port_range_min: number | null;
+  port_range_max: number | null;
+  remote_ip_prefix: string | null;
+  remote_group_id: string | null;
+  security_group_id: string;
+}
+
+// 사전 정의된 서비스 포트
+const PREDEFINED_SERVICES = [
+  { name: 'HTTP', protocol: 'tcp', port: 80 },
+  { name: 'HTTPS', protocol: 'tcp', port: 443 },
+  { name: 'SSH', protocol: 'tcp', port: 22 },
+  { name: 'FTP', protocol: 'tcp', port: 21 },
+  { name: 'SMTP', protocol: 'tcp', port: 25 },
+  { name: 'DNS', protocol: 'tcp', port: 53 },
+  { name: 'DNS (UDP)', protocol: 'udp', port: 53 },
+  { name: 'DHCP Server', protocol: 'udp', port: 67 },
+  { name: 'DHCP Client', protocol: 'udp', port: 68 },
+  { name: 'POP3', protocol: 'tcp', port: 110 },
+  { name: 'IMAP', protocol: 'tcp', port: 143 },
+  { name: 'SNMP', protocol: 'udp', port: 161 },
+  { name: 'LDAP', protocol: 'tcp', port: 389 },
+  { name: 'HTTPS Alt', protocol: 'tcp', port: 8443 },
+  { name: 'MySQL', protocol: 'tcp', port: 3306 },
+  { name: 'PostgreSQL', protocol: 'tcp', port: 5432 },
+  { name: 'Redis', protocol: 'tcp', port: 6379 },
+  { name: 'MongoDB', protocol: 'tcp', port: 27017 },
+  { name: 'RDP', protocol: 'tcp', port: 3389 },
+  { name: 'VNC', protocol: 'tcp', port: 5900 },
+  { name: 'Custom', protocol: '', port: null }
+];
+
+interface RuleFormData {
+  direction: 'ingress' | 'egress';
+  ethertype: 'IPv4' | 'IPv6';
+  protocol: string;
+  serviceType: 'predefined' | 'custom';
+  predefinedService: string;
+  portRangeMin: number | null;
+  portRangeMax: number | null;
+  sourceType: 'cidr' | 'group' | 'anywhere';
+  sourceValue: string;
+}
+
 const NetworkPage: React.FC = () => {
   const [networks, setNetworks] = useState<NetworkResource[]>([]);
   const [subnets, setSubnets] = useState<any[]>([]);
   const [routers, setRouters] = useState<any[]>([]);
+  const [securityGroups, setSecurityGroups] = useState<SecurityGroup[]>([]);
+  const [selectedSecurityGroup, setSelectedSecurityGroup] = useState<SecurityGroup | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'networks' | 'subnets' | 'routers'>('networks');
+  const [activeTab, setActiveTab] = useState<'networks' | 'subnets' | 'routers' | 'security-groups'>('networks');
+  const [showCreateSGModal, setShowCreateSGModal] = useState(false);
+  const [showCreateRuleModal, setShowCreateRuleModal] = useState(false);
+  const [showEditRuleModal, setShowEditRuleModal] = useState(false);
+  const [editingRule, setEditingRule] = useState<SecurityGroupRule | null>(null);
+  const [ruleFormData, setRuleFormData] = useState<RuleFormData>({
+    direction: 'ingress',
+    ethertype: 'IPv4',
+    protocol: '',
+    serviceType: 'predefined',
+    predefinedService: 'HTTP',
+    portRangeMin: null,
+    portRangeMax: null,
+    sourceType: 'cidr',
+    sourceValue: '0.0.0.0/0'
+  });
 
   const fetchNetworkData = async () => {
     try {
       setLoading(true);
-      const [networksData, subnetsData, routersData] = await Promise.all([
+      const [networksData, subnetsData, routersData, securityGroupsData] = await Promise.all([
         neutronService.getNetworks(),
         neutronService.getSubnets(),
-        neutronService.getRouters()
+        neutronService.getRouters(),
+        neutronService.getSecurityGroups()
       ]);
       
       setNetworks(networksData.networks || []);
       setSubnets(subnetsData.subnets || []);
       setRouters(routersData.routers || []);
+      setSecurityGroups(securityGroupsData.security_groups || []);
     } catch (error) {
       console.error('네트워크 데이터 로딩 실패:', error);
       toast.error('네트워크 정보를 불러오는데 실패했습니다.');
@@ -40,16 +116,180 @@ const NetworkPage: React.FC = () => {
     }
   };
 
-  const handleDeleteNetwork = async (networkId: string) => {
-    if (!confirm('정말로 이 네트워크를 삭제하시겠습니까?')) return;
-    
+  useEffect(() => {
+    fetchNetworkData();
+  }, []);
+
+  const handleCreateSecurityGroup = async (name: string, description: string) => {
     try {
-      await neutronService.deleteNetwork(networkId);
-      toast.success('네트워크를 삭제했습니다.');
+      const securityGroupData = {
+        security_group: {
+          name: name,
+          description: description
+        }
+      };
+      
+      await neutronService.createSecurityGroup(securityGroupData);
+      toast.success('보안그룹을 생성했습니다.');
+      setShowCreateSGModal(false);
       fetchNetworkData();
     } catch (error) {
-      console.error('네트워크 삭제 실패:', error);
-      toast.error('네트워크 삭제에 실패했습니다.');
+      console.error('보안그룹 생성 실패:', error);
+      toast.error('보안그룹 생성에 실패했습니다.');
+    }
+  };
+
+  const handleDeleteSecurityGroup = async (sgId: string, sgName: string) => {
+    if (!confirm(`정말로 보안그룹 "${sgName}"을(를) 삭제하시겠습니까?`)) return;
+    
+    try {
+      await neutronService.deleteSecurityGroup(sgId);
+      toast.success('보안그룹을 삭제했습니다.');
+      setSelectedSecurityGroup(null);
+      fetchNetworkData();
+    } catch (error) {
+      console.error('보안그룹 삭제 실패:', error);
+      toast.error('보안그룹 삭제에 실패했습니다.');
+    }
+  };
+
+  const resetRuleForm = () => {
+    setRuleFormData({
+      direction: 'ingress',
+      ethertype: 'IPv4',
+      protocol: '',
+      serviceType: 'predefined',
+      predefinedService: 'HTTP',
+      portRangeMin: null,
+      portRangeMax: null,
+      sourceType: 'cidr',
+      sourceValue: '0.0.0.0/0'
+    });
+  };
+
+  const handleCreateRule = async () => {
+    if (!selectedSecurityGroup) return;
+
+    try {
+      let protocol = ruleFormData.protocol;
+      let portMin = ruleFormData.portRangeMin;
+      let portMax = ruleFormData.portRangeMax;
+
+      // 사전 정의된 서비스 사용 시
+      if (ruleFormData.serviceType === 'predefined' && ruleFormData.predefinedService !== 'Custom') {
+        const service = PREDEFINED_SERVICES.find(s => s.name === ruleFormData.predefinedService);
+        if (service) {
+          protocol = service.protocol;
+          portMin = service.port;
+          portMax = service.port;
+        }
+      }
+
+      // 소스 설정
+      let remoteIpPrefix = null;
+      let remoteGroupId = null;
+
+      switch (ruleFormData.sourceType) {
+        case 'cidr':
+          remoteIpPrefix = ruleFormData.sourceValue;
+          break;
+        case 'group':
+          remoteGroupId = ruleFormData.sourceValue;
+          break;
+        case 'anywhere':
+          remoteIpPrefix = ruleFormData.ethertype === 'IPv4' ? '0.0.0.0/0' : '::/0';
+          break;
+      }
+
+      const ruleData = {
+        security_group_rule: {
+          direction: ruleFormData.direction,
+          ethertype: ruleFormData.ethertype,
+          protocol: protocol || null,
+          port_range_min: portMin,
+          port_range_max: portMax,
+          remote_ip_prefix: remoteIpPrefix,
+          remote_group_id: remoteGroupId,
+          security_group_id: selectedSecurityGroup.id
+        }
+      };
+      
+      await neutronService.createSecurityGroupRule(ruleData);
+      toast.success('보안규칙을 추가했습니다.');
+      setShowCreateRuleModal(false);
+      resetRuleForm();
+      fetchNetworkData();
+      
+      // 선택된 보안그룹 정보 업데이트
+      const updatedSGs = await neutronService.getSecurityGroups();
+      const updatedSG = updatedSGs.security_groups?.find((sg: SecurityGroup) => sg.id === selectedSecurityGroup.id);
+      if (updatedSG) setSelectedSecurityGroup(updatedSG);
+    } catch (error) {
+      console.error('보안규칙 생성 실패:', error);
+      toast.error('보안규칙 생성에 실패했습니다.');
+    }
+  };
+
+  const handleDeleteRule = async (ruleId: string) => {
+    if (!confirm('정말로 이 보안규칙을 삭제하시겠습니까?')) return;
+    
+    try {
+      await neutronService.deleteSecurityGroupRule(ruleId);
+      toast.success('보안규칙을 삭제했습니다.');
+      fetchNetworkData();
+      
+      // 선택된 보안그룹 정보 업데이트
+      if (selectedSecurityGroup) {
+        const updatedSGs = await neutronService.getSecurityGroups();
+        const updatedSG = updatedSGs.security_groups?.find((sg: SecurityGroup) => sg.id === selectedSecurityGroup.id);
+        if (updatedSG) setSelectedSecurityGroup(updatedSG);
+      }
+    } catch (error) {
+      console.error('보안규칙 삭제 실패:', error);
+      toast.error('보안규칙 삭제에 실패했습니다.');
+    }
+  };
+
+  const openEditRuleModal = (rule: SecurityGroupRule) => {
+    setEditingRule(rule);
+    
+    // 기존 규칙 데이터로 폼 초기화
+    const service = PREDEFINED_SERVICES.find(s => 
+      s.protocol === rule.protocol && 
+      s.port === rule.port_range_min && 
+      rule.port_range_min === rule.port_range_max
+    );
+
+    setRuleFormData({
+      direction: rule.direction,
+      ethertype: rule.ethertype,
+      protocol: rule.protocol || '',
+      serviceType: service ? 'predefined' : 'custom',
+      predefinedService: service ? service.name : 'Custom',
+      portRangeMin: rule.port_range_min,
+      portRangeMax: rule.port_range_max,
+      sourceType: rule.remote_group_id ? 'group' : 
+                  (rule.remote_ip_prefix === '0.0.0.0/0' || rule.remote_ip_prefix === '::/0') ? 'anywhere' : 'cidr',
+      sourceValue: rule.remote_group_id || rule.remote_ip_prefix || '0.0.0.0/0'
+    });
+    
+    setShowEditRuleModal(true);
+  };
+
+  const handleUpdateRule = async () => {
+    if (!editingRule || !selectedSecurityGroup) return;
+
+    // 기존 규칙 삭제 후 새 규칙 생성 (OpenStack에서 규칙 직접 수정은 지원하지 않음)
+    try {
+      await neutronService.deleteSecurityGroupRule(editingRule.id);
+      await handleCreateRule();
+      
+      setShowEditRuleModal(false);
+      setEditingRule(null);
+      toast.success('보안규칙을 수정했습니다.');
+    } catch (error) {
+      console.error('보안규칙 수정 실패:', error);
+      toast.error('보안규칙 수정에 실패했습니다.');
     }
   };
 
@@ -62,45 +302,77 @@ const NetworkPage: React.FC = () => {
     }
   };
 
-  const getStatusText = (status: string) => {
-    switch (status.toLowerCase()) {
-      case 'active': return '활성';
-      case 'down': return '비활성';
-      case 'error': return '오류';
-      default: return status;
-    }
+  const getRuleTypeColor = (direction: string) => {
+    return direction === 'ingress' 
+      ? 'bg-blue-100 text-blue-800' 
+      : 'bg-green-100 text-green-800';
   };
 
-  useEffect(() => {
-    fetchNetworkData();
-  }, []);
+  const getProtocolText = (protocol: string | null) => {
+    if (!protocol) return 'Any';
+    return protocol.toUpperCase();
+  };
+
+  const getPortText = (portMin: number | null, portMax: number | null) => {
+    if (!portMin && !portMax) return 'Any';
+    if (portMin === portMax) return portMin?.toString() || 'Any';
+    return `${portMin || ''}-${portMax || ''}`;
+  };
+
+  const getSourceText = (rule: SecurityGroupRule) => {
+    if (rule.remote_group_id) {
+      const sourceGroup = securityGroups.find(sg => sg.id === rule.remote_group_id);
+      return sourceGroup ? `그룹: ${sourceGroup.name}` : `그룹 ID: ${rule.remote_group_id}`;
+    }
+    if (rule.remote_ip_prefix) {
+      if (rule.remote_ip_prefix === '0.0.0.0/0') return 'Anywhere (IPv4)';
+      if (rule.remote_ip_prefix === '::/0') return 'Anywhere (IPv6)';
+      return rule.remote_ip_prefix;
+    }
+    return 'Any';
+  };
+
+  const handleServiceChange = (serviceName: string) => {
+    const service = PREDEFINED_SERVICES.find(s => s.name === serviceName);
+    if (service && service.name !== 'Custom') {
+      setRuleFormData(prev => ({
+        ...prev,
+        predefinedService: serviceName,
+        protocol: service.protocol,
+        portRangeMin: service.port,
+        portRangeMax: service.port
+      }));
+    } else {
+      setRuleFormData(prev => ({
+        ...prev,
+        predefinedService: serviceName,
+        protocol: '',
+        portRangeMin: null,
+        portRangeMax: null
+      }));
+    }
+  };
 
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+        <RefreshCw className="h-8 w-8 animate-spin text-blue-600" />
+        <span className="ml-2 text-gray-600">네트워크 정보를 불러오는 중...</span>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      {/* 헤더 */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">네트워크</h1>
-        <div className="flex space-x-3">
-          <button
-            onClick={fetchNetworkData}
-            className="flex items-center px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
-          >
-            <RefreshCw className="h-4 w-4 mr-2" />
-            새로고침
-          </button>
-          <button className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-            <Plus className="h-4 w-4 mr-2" />
-            네트워크 생성
-          </button>
-        </div>
+        <h1 className="text-2xl font-bold text-gray-900">네트워크 관리</h1>
+        <button
+          onClick={fetchNetworkData}
+          className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+        >
+          <RefreshCw className="h-4 w-4 mr-2" />
+          새로고침
+        </button>
       </div>
 
       {/* 탭 네비게이션 */}
@@ -139,191 +411,738 @@ const NetworkPage: React.FC = () => {
             <Router className="h-4 w-4 inline mr-2" />
             라우터
           </button>
+          <button
+            onClick={() => setActiveTab('security-groups')}
+            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+              activeTab === 'security-groups'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <Shield className="h-4 w-4 inline mr-2" />
+            보안그룹
+          </button>
         </nav>
       </div>
 
       {/* 네트워크 탭 */}
       {activeTab === 'networks' && (
-        <div className="card overflow-hidden">
+        <div className="bg-white shadow rounded-lg">
           <div className="px-6 py-4 border-b border-gray-200">
             <h3 className="text-lg font-medium text-gray-900">네트워크 목록</h3>
           </div>
-          
-          {networks.length === 0 ? (
-            <div className="px-6 py-12 text-center">
-              <Network className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-500">생성된 네트워크가 없습니다.</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">이름</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">관리 상태</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">서브넷</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {networks.map((network) => (
-                    <tr key={network.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <Network className="h-5 w-5 text-gray-400 mr-3" />
-                          <div>
-                            <div className="text-sm font-medium text-gray-900">{network.name}</div>
-                            <div className="text-sm text-gray-500">{network.id}</div>
-                          </div>
+          <div className="overflow-hidden">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">이름</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">관리 상태</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">서브넷 수</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {networks.map((network) => (
+                  <tr key={network.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center">
+                        <Network className="h-5 w-5 text-gray-400 mr-3" />
+                        <div>
+                          <div className="text-sm font-medium text-gray-900">{network.name}</div>
+                          <div className="text-sm text-gray-500">{network.id}</div>
                         </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(network.status)}`}>
-                          {getStatusText(network.status)}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                          network.admin_state_up ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                        }`}>
-                          {network.admin_state_up ? '활성' : '비활성'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {network.subnets.length}개
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        <button
-                          onClick={() => handleDeleteNetwork(network.id)}
-                          className="text-red-600 hover:text-red-900"
-                          title="삭제"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(network.status)}`}>
+                        {network.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {network.admin_state_up ? '활성' : '비활성'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {network.subnets.length}개
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
       {/* 서브넷 탭 */}
       {activeTab === 'subnets' && (
-        <div className="card overflow-hidden">
+        <div className="bg-white shadow rounded-lg">
           <div className="px-6 py-4 border-b border-gray-200">
             <h3 className="text-lg font-medium text-gray-900">서브넷 목록</h3>
           </div>
-          
-          {subnets.length === 0 ? (
-            <div className="px-6 py-12 text-center">
-              <Globe className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-500">생성된 서브넷이 없습니다.</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">이름</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">CIDR</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IP 버전</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">DHCP</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {subnets.map((subnet) => (
-                    <tr key={subnet.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <Globe className="h-5 w-5 text-gray-400 mr-3" />
-                          <div>
-                            <div className="text-sm font-medium text-gray-900">{subnet.name}</div>
-                            <div className="text-sm text-gray-500">{subnet.id}</div>
-                          </div>
+          <div className="overflow-hidden">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">이름</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">CIDR</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">게이트웨이</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IP 버전</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {subnets.map((subnet) => (
+                  <tr key={subnet.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center">
+                        <Globe className="h-5 w-5 text-gray-400 mr-3" />
+                        <div>
+                          <div className="text-sm font-medium text-gray-900">{subnet.name}</div>
+                          <div className="text-sm text-gray-500">{subnet.id}</div>
                         </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {subnet.cidr}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        IPv{subnet.ip_version}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                          subnet.enable_dhcp ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                        }`}>
-                          {subnet.enable_dhcp ? '활성' : '비활성'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{subnet.cidr}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{subnet.gateway_ip || 'N/A'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">IPv{subnet.ip_version}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
       {/* 라우터 탭 */}
       {activeTab === 'routers' && (
-        <div className="card overflow-hidden">
+        <div className="bg-white shadow rounded-lg">
           <div className="px-6 py-4 border-b border-gray-200">
             <h3 className="text-lg font-medium text-gray-900">라우터 목록</h3>
           </div>
-          
-          {routers.length === 0 ? (
-            <div className="px-6 py-12 text-center">
-              <Router className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-500">생성된 라우터가 없습니다.</p>
+          <div className="overflow-hidden">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">이름</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">관리 상태</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">외부 게이트웨이</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {routers.map((router) => (
+                  <tr key={router.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center">
+                        <Router className="h-5 w-5 text-gray-400 mr-3" />
+                        <div>
+                          <div className="text-sm font-medium text-gray-900">{router.name}</div>
+                          <div className="text-sm text-gray-500">{router.id}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(router.status)}`}>
+                        {router.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {router.admin_state_up ? '활성' : '비활성'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {router.external_gateway_info ? '연결됨' : '연결 안됨'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* 보안그룹 탭 */}
+      {activeTab === 'security-groups' && (
+        <div className="space-y-6">
+          {/* 보안그룹 목록 */}
+          <div className="bg-white shadow rounded-lg">
+            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+              <h3 className="text-lg font-medium text-gray-900">보안그룹 목록</h3>
+              <button
+                onClick={() => setShowCreateSGModal(true)}
+                className="flex items-center px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
+              >
+                <Plus className="h-4 w-4 mr-1" />
+                생성
+              </button>
             </div>
-          ) : (
             <div className="overflow-x-auto">
-              <table className="w-full">
+              <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">이름</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">상태</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">관리 상태</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">외부 게이트웨이</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">설명</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">규칙 수</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {routers.map((router) => (
-                    <tr key={router.id} className="hover:bg-gray-50">
+                  {securityGroups.map((sg) => (
+                    <tr key={sg.id} className={`hover:bg-gray-50 ${selectedSecurityGroup?.id === sg.id ? 'bg-blue-50' : ''}`}>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
-                          <Router className="h-5 w-5 text-gray-400 mr-3" />
+                          <Shield className="h-5 w-5 text-gray-400 mr-3" />
                           <div>
-                            <div className="text-sm font-medium text-gray-900">{router.name}</div>
-                            <div className="text-sm text-gray-500">{router.id}</div>
+                            <div className="text-sm font-medium text-gray-900">{sg.name}</div>
+                            <div className="text-sm text-gray-500 truncate max-w-xs">{sg.id}</div>
                           </div>
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(router.status)}`}>
-                          {getStatusText(router.status)}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                          router.admin_state_up ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                        }`}>
-                          {router.admin_state_up ? '활성' : '비활성'}
-                        </span>
+                      <td className="px-6 py-4 text-sm text-gray-900">
+                        <div className="max-w-xs truncate" title={sg.description}>
+                          {sg.description || '-'}
+                        </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {router.external_gateway_info ? '연결됨' : '연결 안됨'}
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                          {sg.rules?.length || 0}개
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                        <div className="flex items-center space-x-2">
+                          <button
+                            onClick={() => setSelectedSecurityGroup(sg)}
+                            className="inline-flex items-center px-2 py-1 text-xs font-medium text-blue-600 bg-blue-100 rounded hover:bg-blue-200"
+                            title="규칙 관리"
+                          >
+                            <Eye className="h-3 w-3 mr-1" />
+                            규칙 보기
+                          </button>
+                          {sg.name !== 'default' && (
+                            <button
+                              onClick={() => handleDeleteSecurityGroup(sg.id, sg.name)}
+                              className="inline-flex items-center px-2 py-1 text-xs font-medium text-red-600 bg-red-100 rounded hover:bg-red-200"
+                              title="삭제"
+                            >
+                              <Trash2 className="h-3 w-3 mr-1" />
+                              삭제
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              {securityGroups.length === 0 && (
+                <div className="text-center py-8 text-gray-500">
+                  <Shield className="h-8 w-8 mx-auto mb-2 text-gray-300" />
+                  <p>보안그룹이 없습니다.</p>
+                </div>
+              )}
             </div>
-          )}
+          </div>
+
+
+        </div>
+      )}
+
+      {/* 보안그룹 규칙 상세 모달 */}
+      {selectedSecurityGroup && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center z-50">
+          <div className="relative p-6 border w-full max-w-6xl mx-4 bg-white rounded-lg shadow-xl max-h-[90vh] overflow-y-auto">
+            {/* 모달 헤더 */}
+            <div className="flex justify-between items-center mb-6 pb-4 border-b border-gray-200">
+              <div className="flex items-center">
+                <Shield className="h-6 w-6 text-blue-600 mr-3" />
+                <div>
+                  <h3 className="text-xl font-semibold text-gray-900">
+                    {selectedSecurityGroup.name} 보안규칙 관리
+                  </h3>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {selectedSecurityGroup.description || '설명 없음'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-3">
+                <button
+                  onClick={() => {
+                    resetRuleForm();
+                    setShowCreateRuleModal(true);
+                  }}
+                  className="flex items-center px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  규칙 추가
+                </button>
+                <button
+                  onClick={() => setSelectedSecurityGroup(null)}
+                  className="flex items-center px-4 py-2 bg-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-400 transition-colors"
+                >
+                  닫기
+                </button>
+              </div>
+            </div>
+
+            {/* 규칙 통계 */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <div className="bg-blue-50 p-4 rounded-lg">
+                <div className="text-2xl font-bold text-blue-700">
+                  {(selectedSecurityGroup.rules || []).filter(r => r.direction === 'ingress').length}
+                </div>
+                <div className="text-sm text-blue-600">인바운드 규칙</div>
+              </div>
+              <div className="bg-green-50 p-4 rounded-lg">
+                <div className="text-2xl font-bold text-green-700">
+                  {(selectedSecurityGroup.rules || []).filter(r => r.direction === 'egress').length}
+                </div>
+                <div className="text-sm text-green-600">아웃바운드 규칙</div>
+              </div>
+              <div className="bg-purple-50 p-4 rounded-lg">
+                <div className="text-2xl font-bold text-purple-700">
+                  {(selectedSecurityGroup.rules || []).filter(r => r.protocol === 'tcp').length}
+                </div>
+                <div className="text-sm text-purple-600">TCP 규칙</div>
+              </div>
+              <div className="bg-amber-50 p-4 rounded-lg">
+                <div className="text-2xl font-bold text-amber-700">
+                  {(selectedSecurityGroup.rules || []).filter(r => r.protocol === 'udp').length}
+                </div>
+                <div className="text-sm text-amber-600">UDP 규칙</div>
+              </div>
+            </div>
+
+            {/* 규칙 테이블 */}
+            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+              <div className="px-6 py-3 bg-gray-50 border-b border-gray-200">
+                <h4 className="text-lg font-medium text-gray-900">보안규칙 목록</h4>
+              </div>
+              
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">방향</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IP 버전</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">프로토콜</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">포트 범위</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">소스/목적지</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {(selectedSecurityGroup.rules || []).map((rule) => (
+                      <tr key={rule.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full ${getRuleTypeColor(rule.direction)}`}>
+                            {rule.direction === 'ingress' ? '인바운드' : '아웃바운드'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className="inline-flex px-2 py-1 text-xs font-medium bg-gray-100 text-gray-800 rounded">
+                            {rule.ethertype}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-mono">
+                          {getProtocolText(rule.protocol)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-mono">
+                          {getPortText(rule.port_range_min, rule.port_range_max)}
+                        </td>
+                        <td className="px-6 py-4 text-sm text-gray-900">
+                          <div className="max-w-48 break-all" title={getSourceText(rule)}>
+                            {getSourceText(rule)}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                          <div className="flex items-center space-x-2">
+                            <button
+                              onClick={() => openEditRuleModal(rule)}
+                              className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-100 rounded-md hover:bg-blue-200 transition-colors"
+                              title="규칙 수정"
+                            >
+                              <Edit className="h-3 w-3 mr-1" />
+                              수정
+                            </button>
+                            <button
+                              onClick={() => handleDeleteRule(rule.id)}
+                              className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-red-600 bg-red-100 rounded-md hover:bg-red-200 transition-colors"
+                              title="규칙 삭제"
+                            >
+                              <Trash2 className="h-3 w-3 mr-1" />
+                              삭제
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                
+                {(!selectedSecurityGroup.rules || selectedSecurityGroup.rules.length === 0) && (
+                  <div className="text-center py-12 text-gray-500">
+                    <Shield className="h-12 w-12 mx-auto mb-4 text-gray-300" />
+                    <h4 className="text-lg font-medium text-gray-900 mb-2">보안규칙이 없습니다</h4>
+                    <p className="text-sm">새로운 보안규칙을 추가하여 네트워크 액세스를 제어하세요.</p>
+                    <button
+                      onClick={() => {
+                        resetRuleForm();
+                        setShowCreateRuleModal(true);
+                      }}
+                      className="mt-4 inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      첫 번째 규칙 추가
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 도움말 */}
+            <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="flex items-start">
+                <Settings className="h-5 w-5 text-blue-600 mt-0.5 mr-3" />
+                <div>
+                  <h5 className="text-sm font-medium text-blue-800 mb-1">보안규칙 팁</h5>
+                  <ul className="text-sm text-blue-700 space-y-1">
+                    <li>• 인바운드 규칙은 외부에서 인스턴스로 들어오는 트래픽을 제어합니다</li>
+                    <li>• 아웃바운드 규칙은 인스턴스에서 외부로 나가는 트래픽을 제어합니다</li>
+                    <li>• 포트 범위를 지정하거나 사전 정의된 서비스를 선택할 수 있습니다</li>
+                    <li>• CIDR 표기법(예: 192.168.1.0/24)으로 IP 범위를 지정하세요</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 보안그룹 생성 모달 */}
+      {showCreateSGModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center z-50">
+          <div className="relative p-8 border w-full max-w-md mx-auto bg-white rounded-lg shadow-lg">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">보안그룹 생성</h3>
+            <div className="mb-4">
+              <label htmlFor="sgName" className="block text-sm font-medium text-gray-700 mb-1">
+                이름 *
+              </label>
+              <input
+                type="text"
+                id="sgName"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                placeholder="보안그룹 이름"
+                required
+              />
+            </div>
+            <div className="mb-4">
+              <label htmlFor="sgDescription" className="block text-sm font-medium text-gray-700 mb-1">
+                설명 (선택사항)
+              </label>
+              <textarea
+                id="sgDescription"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                rows={3}
+                placeholder="보안그룹에 대한 설명"
+              />
+            </div>
+            <div className="flex justify-end space-x-2">
+              <button
+                onClick={() => setShowCreateSGModal(false)}
+                className="px-4 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400"
+              >
+                취소
+              </button>
+              <button
+                onClick={() => {
+                  const nameInput = document.getElementById('sgName') as HTMLInputElement;
+                  const descriptionInput = document.getElementById('sgDescription') as HTMLTextAreaElement;
+                  handleCreateSecurityGroup(nameInput.value, descriptionInput.value || '');
+                }}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              >
+                생성
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 보안그룹 규칙 추가/수정 모달 */}
+      {(showCreateRuleModal || showEditRuleModal) && selectedSecurityGroup && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center z-50">
+          <div className="relative p-8 border w-full max-w-2xl mx-auto bg-white rounded-lg shadow-lg max-h-screen overflow-y-auto">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-semibold text-gray-900">
+                {showEditRuleModal ? '보안규칙 수정' : '보안규칙 추가'} - {selectedSecurityGroup.name}
+              </h3>
+              <button
+                onClick={() => {
+                  setShowCreateRuleModal(false);
+                  setShowEditRuleModal(false);
+                  setEditingRule(null);
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <AlertTriangle className="h-6 w-6" />
+              </button>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* 기본 설정 */}
+              <div className="space-y-4">
+                <h4 className="font-medium text-gray-900 border-b pb-2">기본 설정</h4>
+                
+                {/* 방향 */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">방향 *</label>
+                  <select
+                    value={ruleFormData.direction}
+                    onChange={(e) => setRuleFormData(prev => ({ ...prev, direction: e.target.value as 'ingress' | 'egress' }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  >
+                    <option value="ingress">인바운드 (Ingress)</option>
+                    <option value="egress">아웃바운드 (Egress)</option>
+                  </select>
+                </div>
+
+                {/* IP 버전 */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">IP 버전</label>
+                  <select
+                    value={ruleFormData.ethertype}
+                    onChange={(e) => setRuleFormData(prev => ({ ...prev, ethertype: e.target.value as 'IPv4' | 'IPv6' }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  >
+                    <option value="IPv4">IPv4</option>
+                    <option value="IPv6">IPv6</option>
+                  </select>
+                </div>
+
+                {/* 서비스 타입 */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">서비스 설정</label>
+                  <div className="flex space-x-4 mb-3">
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        checked={ruleFormData.serviceType === 'predefined'}
+                        onChange={() => setRuleFormData(prev => ({ ...prev, serviceType: 'predefined' }))}
+                        className="mr-2"
+                      />
+                      사전 정의된 서비스
+                    </label>
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        checked={ruleFormData.serviceType === 'custom'}
+                        onChange={() => setRuleFormData(prev => ({ ...prev, serviceType: 'custom' }))}
+                        className="mr-2"
+                      />
+                      사용자 정의
+                    </label>
+                  </div>
+
+                  {ruleFormData.serviceType === 'predefined' && (
+                    <select
+                      value={ruleFormData.predefinedService}
+                      onChange={(e) => handleServiceChange(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      {PREDEFINED_SERVICES.map(service => (
+                        <option key={service.name} value={service.name}>
+                          {service.name} {service.port && `(${service.protocol?.toUpperCase()}/${service.port})`}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+
+              {/* 프로토콜 및 포트 설정 */}
+              <div className="space-y-4">
+                <h4 className="font-medium text-gray-900 border-b pb-2">프로토콜 및 포트</h4>
+                
+                {(ruleFormData.serviceType === 'custom' || ruleFormData.predefinedService === 'Custom') && (
+                  <>
+                    {/* 프로토콜 */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">프로토콜</label>
+                      <select
+                        value={ruleFormData.protocol}
+                        onChange={(e) => setRuleFormData(prev => ({ ...prev, protocol: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value="">Any</option>
+                        <option value="tcp">TCP</option>
+                        <option value="udp">UDP</option>
+                        <option value="icmp">ICMP</option>
+                      </select>
+                    </div>
+
+                    {/* 포트 범위 */}
+                    {ruleFormData.protocol && ruleFormData.protocol !== 'icmp' && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">시작 포트</label>
+                          <input
+                            type="number"
+                            value={ruleFormData.portRangeMin || ''}
+                            onChange={(e) => setRuleFormData(prev => ({ 
+                              ...prev, 
+                              portRangeMin: e.target.value ? parseInt(e.target.value) : null 
+                            }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="예: 80"
+                            min="1"
+                            max="65535"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">종료 포트</label>
+                          <input
+                            type="number"
+                            value={ruleFormData.portRangeMax || ''}
+                            onChange={(e) => setRuleFormData(prev => ({ 
+                              ...prev, 
+                              portRangeMax: e.target.value ? parseInt(e.target.value) : null 
+                            }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="예: 80"
+                            min="1"
+                            max="65535"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* 현재 설정 요약 */}
+                {ruleFormData.serviceType === 'predefined' && ruleFormData.predefinedService !== 'Custom' && (
+                  <div className="bg-blue-50 p-3 rounded-md">
+                    <h5 className="font-medium text-blue-900 mb-1">현재 설정:</h5>
+                    <p className="text-sm text-blue-800">
+                      프로토콜: {ruleFormData.protocol?.toUpperCase() || 'Any'}
+                      {ruleFormData.portRangeMin && (
+                        <>, 포트: {ruleFormData.portRangeMin}
+                        {ruleFormData.portRangeMax !== ruleFormData.portRangeMin && `-${ruleFormData.portRangeMax}`}</>
+                      )}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 소스/목적지 설정 */}
+            <div className="mt-6 space-y-4">
+              <h4 className="font-medium text-gray-900 border-b pb-2">
+                {ruleFormData.direction === 'ingress' ? '소스' : '목적지'} 설정
+              </h4>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">타입</label>
+                <div className="grid grid-cols-3 gap-3">
+                  <label className="flex items-center p-3 border rounded-md cursor-pointer hover:bg-gray-50">
+                    <input
+                      type="radio"
+                      checked={ruleFormData.sourceType === 'anywhere'}
+                      onChange={() => setRuleFormData(prev => ({ 
+                        ...prev, 
+                        sourceType: 'anywhere',
+                        sourceValue: prev.ethertype === 'IPv4' ? '0.0.0.0/0' : '::/0'
+                      }))}
+                      className="mr-2"
+                    />
+                    <div>
+                      <div className="font-medium">Anywhere</div>
+                      <div className="text-xs text-gray-500">모든 IP</div>
+                    </div>
+                  </label>
+                  
+                  <label className="flex items-center p-3 border rounded-md cursor-pointer hover:bg-gray-50">
+                    <input
+                      type="radio"
+                      checked={ruleFormData.sourceType === 'cidr'}
+                      onChange={() => setRuleFormData(prev => ({ ...prev, sourceType: 'cidr' }))}
+                      className="mr-2"
+                    />
+                    <div>
+                      <div className="font-medium">CIDR</div>
+                      <div className="text-xs text-gray-500">IP 주소/범위</div>
+                    </div>
+                  </label>
+                  
+                  <label className="flex items-center p-3 border rounded-md cursor-pointer hover:bg-gray-50">
+                    <input
+                      type="radio"
+                      checked={ruleFormData.sourceType === 'group'}
+                      onChange={() => setRuleFormData(prev => ({ ...prev, sourceType: 'group' }))}
+                      className="mr-2"
+                    />
+                    <div>
+                      <div className="font-medium">보안그룹</div>
+                      <div className="text-xs text-gray-500">다른 그룹</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              {ruleFormData.sourceType === 'cidr' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    CIDR 표기법 (예: 192.168.1.0/24, 10.0.0.1/32)
+                  </label>
+                  <input
+                    type="text"
+                    value={ruleFormData.sourceValue}
+                    onChange={(e) => setRuleFormData(prev => ({ ...prev, sourceValue: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="예: 192.168.1.0/24"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    단일 IP의 경우 /32 (IPv4) 또는 /128 (IPv6)를 사용하세요.
+                  </p>
+                </div>
+              )}
+
+              {ruleFormData.sourceType === 'group' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">보안그룹 선택</label>
+                  <select
+                    value={ruleFormData.sourceValue}
+                    onChange={(e) => setRuleFormData(prev => ({ ...prev, sourceValue: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  >
+                    <option value="">보안그룹을 선택하세요</option>
+                    {securityGroups.map(sg => (
+                      <option key={sg.id} value={sg.id}>
+                        {sg.name} ({sg.id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {/* 버튼 */}
+            <div className="flex justify-end space-x-3 mt-8 pt-6 border-t">
+              <button
+                onClick={() => {
+                  setShowCreateRuleModal(false);
+                  setShowEditRuleModal(false);
+                  setEditingRule(null);
+                  resetRuleForm();
+                }}
+                className="px-4 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400"
+              >
+                취소
+              </button>
+              <button
+                onClick={showEditRuleModal ? handleUpdateRule : handleCreateRule}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              >
+                {showEditRuleModal ? '수정' : '추가'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -26,12 +26,16 @@ interface CreateInstanceForm {
   image_ref: string;
   flavor_ref: string;
   networks: { uuid: string; fixed_ip?: string }[];
-  security_groups: string[];
+  security_groups: string;
   key_name?: string;
   availability_zone?: string;
   user_data?: string;
   metadata: { [key: string]: string };
   boot_source: 'image' | 'volume' | 'snapshot';
+  // 볼륨 부팅 관련 필드
+  volume_source?: 'image' | 'volume' | 'snapshot';
+  source_volume_id?: string;
+  source_snapshot_id?: string;
   volume_size?: number;
   volume_type?: string;
   delete_on_termination: boolean;
@@ -93,6 +97,8 @@ const CreateInstancePage: React.FC = () => {
   const [keyPairs, setKeyPairs] = useState<KeyPair[]>([]);
   const [availabilityZones, setAvailabilityZones] = useState<string[]>([]);
   const [volumeTypes, setVolumeTypes] = useState<any[]>([]);
+  const [availableVolumes, setAvailableVolumes] = useState<any[]>([]);
+  const [snapshots, setSnapshots] = useState<any[]>([]);
 
   const [showCreateSecurityGroup, setShowCreateSecurityGroup] = useState(false);
   const [showCreateKeyPair, setShowCreateKeyPair] = useState(false);
@@ -102,9 +108,10 @@ const CreateInstancePage: React.FC = () => {
       name: '',
       description: '',
       networks: [],
-      security_groups: ['default'],
+      security_groups: 'default',
       metadata: {},
       boot_source: 'image',
+      volume_source: 'image',
       delete_on_termination: true,
       availability_zone: 'nova',
       auto_assign_floating_ip: false
@@ -112,8 +119,11 @@ const CreateInstancePage: React.FC = () => {
   });
 
   const bootSource = watch('boot_source');
+  const volumeSource = watch('volume_source');
   const selectedImage = watch('image_ref');
   const selectedFlavor = watch('flavor_ref');
+  const selectedVolume = watch('source_volume_id');
+  const selectedSnapshot = watch('source_snapshot_id');
 
   // 데이터 로딩
   const loadData = async () => {
@@ -126,7 +136,9 @@ const CreateInstancePage: React.FC = () => {
         securityGroupsData,
         keyPairsData,
         availabilityZonesData,
-        volumeTypesData
+        volumeTypesData,
+        volumesData,
+        snapshotsData
       ] = await Promise.all([
         glanceService.getImages(),
         novaService.getFlavors(),
@@ -134,24 +146,181 @@ const CreateInstancePage: React.FC = () => {
         neutronService.getSecurityGroups(),
         novaService.getKeyPairs(),
         novaService.getAvailabilityZones(),
-        cinderService.getVolumeTypes()
+        cinderService.getVolumeTypes(),
+        cinderService.getVolumes(),
+        cinderService.getSnapshots()
       ]);
 
-      setImages(imagesData.images?.filter((img: Image) => img.status === 'active') || []);
+      // 이미지와 스냅샷을 구분하여 필터링 (더 엄격한 기준)
+      const allImages = imagesData.images || [];
+      const filteredImages: Image[] = [];
+      const imageSnapshots: any[] = [];
+      
+      allImages.forEach((img: any) => {
+        // 활성 상태가 아니면 제외
+        if (img.status !== 'active') return;
+        
+        // 스냅샷 판별 조건들 (더 엄격함)
+        const isSnapshot = 
+          // 1. image_type이 snapshot (확실한 스냅샷)
+          img.image_type === 'snapshot' ||
+          // 2. metadata에서 image_type이 snapshot
+          (img.metadata && img.metadata.image_type === 'snapshot') ||
+          // 3. base_image_ref가 있음 (Nova 스냅샷의 확실한 특징)
+          img.base_image_ref ||
+          // 4. instance_uuid가 있음 (인스턴스에서 생성된 스냅샷)
+          img.instance_uuid ||
+          // 5. owner_specified가 있음 (Nova createImage 명령으로 생성)
+          img.owner_specified ||
+          // 6. 이름이나 설명에 스냅샷 관련 키워드가 포함되고 visibility가 private
+          (img.visibility === 'private' && 
+           ((/snapshot|snap|backup|image-/i.test(img.name || '')) ||
+            (/snapshot|snap|backup/i.test(img.description || '')))) ||
+          // 7. 메타데이터에 스냅샷 관련 정보가 있음
+          (img.metadata && (
+            img.metadata.user_id ||
+            img.metadata.base_image_ref ||
+            img.metadata.instance_type_id ||
+            img.metadata.instance_type_memory_mb ||
+            img.metadata.instance_type_vcpus ||
+            img.metadata.instance_type_root_gb
+          ));
+        
+        // OS 이미지 판별 (공식 이미지의 특징)
+        const isOfficialImage = 
+          // 1. visibility가 public (공식 이미지)
+          img.visibility === 'public' ||
+          // 2. 잘 알려진 OS 이름들
+          /^(ubuntu|centos|rhel|fedora|debian|opensuse|windows|cirros|alpine|rocky|almalinux)/i.test(img.name || '') ||
+          // 3. 메타데이터에 OS 정보가 있음
+          (img.metadata && (img.metadata.os_type || img.metadata.os_distro || img.metadata.os_version));
+        
+        if (isSnapshot) {
+          imageSnapshots.push(img);
+        } else if (isOfficialImage || img.visibility === 'public') {
+          // 공식 이미지나 public 이미지만 OS 이미지로 분류
+          filteredImages.push(img);
+        }
+        // 애매한 이미지들은 제외 (neither snapshot nor clear OS image)
+      });
+      
+      console.log('🖼️ 필터링된 이미지:', filteredImages.length, '개');
+      console.log('📸 발견된 스냅샷:', imageSnapshots.length, '개');
+      
+      // 최종 검증: OS 이미지만 남기고 의심스러운 것들 추가 제거
+      const finalImages = filteredImages.filter((img: any) => {
+        // 이름에 스냅샷 관련 키워드가 있으면 제외
+        const suspiciousName = /snapshot|snap|backup|image-\d+|server-\d+/i.test(img.name || '');
+        
+        // 메타데이터에 인스턴스 관련 정보가 있으면 제외 (Nova 스냅샷의 특징)
+        const hasInstanceMetadata = img.metadata && (
+          img.metadata.instance_uuid ||
+          img.metadata.user_id ||
+          img.metadata.base_image_ref ||
+          img.metadata.instance_type_id
+        );
+        
+        // OS 이미지의 확실한 특징이 있는지 확인
+        const isDefinitelyOSImage = 
+          // Public 이미지이거나
+          img.visibility === 'public' ||
+          // 잘 알려진 OS 이름으로 시작하거나
+          /^(ubuntu|centos|rhel|fedora|debian|opensuse|windows|cirros|alpine|rocky|almalinux|oracle)/i.test(img.name || '') ||
+          // 메타데이터에 OS 정보가 있음
+          (img.metadata && (
+            img.metadata.os_type || 
+            img.metadata.os_distro || 
+            img.metadata.os_version ||
+            img.metadata.architecture
+          ));
+        
+        // 의심스러운 이름이나 인스턴스 메타데이터가 있으면 제외
+        if (suspiciousName || hasInstanceMetadata) {
+          console.log(`❌ 스냅샷으로 판단하여 제외: ${img.name} (suspicious: ${suspiciousName}, metadata: ${hasInstanceMetadata})`);
+          return false;
+        }
+        
+        // 확실한 OS 이미지가 아니면 제외
+        if (!isDefinitelyOSImage) {
+          console.log(`❌ OS 이미지가 아닌 것으로 판단하여 제외: ${img.name}`);
+          return false;
+        }
+        
+        return true;
+      });
+      
+      console.log('✅ 최종 OS 이미지:', finalImages.length, '개');
+      finalImages.forEach((img: any) => {
+        console.log(`  - ${img.name} (${img.visibility})`);
+      });
+      
+      setImages(finalImages);
       setFlavors(flavorsData.flavors || []);
       setNetworks(networksData.networks || []);
       setSecurityGroups(securityGroupsData.security_groups || []);
       setKeyPairs(keyPairsData.keypairs?.map((kp: any) => kp.keypair) || []);
       setAvailabilityZones(availabilityZonesData.availabilityZoneInfo?.map((az: any) => az.zoneName) || ['nova']);
       setVolumeTypes(volumeTypesData.volume_types || []);
+      setAvailableVolumes(volumesData.volumes?.filter((vol: any) => vol.status === 'available') || []);
+      
+      // Cinder 볼륨 스냅샷과 Nova 이미지 스냅샷 합치기
+      const cinderSnapshots = snapshotsData.snapshots || [];
+      
+      // 이미 분류된 이미지 스냅샷을 사용 (위에서 이미 분류함)
+      const imageSnapshotsForInstance = imageSnapshots.map((img: any) => ({
+        id: img.id,
+        name: img.name,
+        status: img.status,
+        size: img.size ? Math.ceil(img.size / (1024 * 1024 * 1024)) : null,
+        created_at: img.created_at,
+        volume_id: null,
+        description: img.description || '인스턴스 이미지 스냅샷',
+        snapshot_type: 'image'
+      }));
+      
+      // 두 종류 스냅샷 합치기
+      const allSnapshots = [
+        ...cinderSnapshots.map((s: any) => ({ ...s, snapshot_type: 'volume' })), 
+        ...imageSnapshotsForInstance
+      ];
+      
+      console.log('🔍 인스턴스 생성용 Cinder 볼륨 스냅샷:', cinderSnapshots.length);
+      console.log('🔍 인스턴스 생성용 Nova 이미지 스냅샷:', imageSnapshotsForInstance.length);
+      console.log('🔍 인스턴스 생성용 전체 스냅샷:', allSnapshots.length);
+      
+      allSnapshots.forEach((snapshot: any, index: number) => {
+        console.log(`  ${index + 1}. 스냅샷 (${snapshot.snapshot_type}):`, {
+          id: snapshot.id,
+          name: snapshot.name,
+          status: snapshot.status,
+          volume_id: snapshot.volume_id,
+          size: snapshot.size
+        });
+      });
+      
+      // 기본적인 존재 여부만 체크
+      const validSnapshots = allSnapshots.filter((snap: any) => {
+        return snap && snap.id;
+      });
+      
+      console.log('✅ 인스턴스 생성용 최종 스냅샷 (필터링 없음):', validSnapshots.length);
+      console.log('✅ 인스턴스 생성용 스냅샷들:', validSnapshots.map((s: any) => ({ id: s.id, name: s.name, status: s.status, type: s.snapshot_type })));
+      
+      console.log('🔄 setSnapshots 호출 전 현재 snapshots 상태:', snapshots.length);
+      setSnapshots(validSnapshots);
+      console.log('🔄 setSnapshots 호출 완료 - 새 데이터 길이:', validSnapshots.length);
 
       // internal-net 찾아서 기본 네트워크로 설정
       const internalNet = networksData.networks?.find((net: any) => net.name === 'internal-net');
       if (internalNet) {
         setValue('networks', [{ uuid: internalNet.id }]);
+        console.log('기본 네트워크 설정:', internalNet.name, internalNet.id);
       } else if (networksData.networks?.length > 0) {
         // internal-net이 없으면 첫 번째 네트워크 사용
         setValue('networks', [{ uuid: networksData.networks[0].id }]);
+        console.log('첫 번째 네트워크 설정:', networksData.networks[0].name, networksData.networks[0].id);
+      } else {
+        console.warn('사용 가능한 네트워크가 없습니다.');
       }
       if (availabilityZonesData.availabilityZoneInfo?.length > 0) {
         setValue('availability_zone', availabilityZonesData.availabilityZoneInfo[0].zoneName);
@@ -168,32 +337,163 @@ const CreateInstancePage: React.FC = () => {
     try {
       setCreating(true);
 
-      // 네트워크 설정
-      const networks = data.networks.map(net => ({
-        uuid: net.uuid,
-        ...(net.fixed_ip && { fixed_ip: net.fixed_ip })
-      }));
+      // 네트워크 설정 검증 및 구성
+      let networks = [];
+      
+      if (data.networks && data.networks.length > 0 && data.networks[0].uuid) {
+        networks = data.networks.map(net => ({
+          uuid: net.uuid,
+          ...(net.fixed_ip && { fixed_ip: net.fixed_ip })
+        }));
+      } else {
+        // 네트워크가 설정되지 않은 경우 internal-net 찾기
+        const allNetworks = await neutronService.getNetworks();
+        const internalNet = allNetworks.networks?.find((net: any) => net.name === 'internal-net');
+        
+        if (internalNet) {
+          networks = [{ uuid: internalNet.id }];
+          console.log('자동으로 internal-net 설정:', internalNet.id);
+        } else if (allNetworks.networks?.length > 0) {
+          networks = [{ uuid: allNetworks.networks[0].id }];
+          console.log('자동으로 첫 번째 네트워크 설정:', allNetworks.networks[0].id);
+        } else {
+          throw new Error('사용 가능한 네트워크가 없습니다.');
+        }
+      }
+      
+      console.log('네트워크 설정:', networks);
 
+      // 필수 항목 검증
+      if (!data.name || data.name.trim() === '') {
+        throw new Error('인스턴스 이름을 입력해주세요.');
+      }
+      
+      if (!data.flavor_ref) {
+        throw new Error('플레이버를 선택해주세요.');
+      }
+      
+      // 데이터 로딩 확인
+      if (images.length === 0 && data.boot_source === 'image') {
+        throw new Error('사용 가능한 이미지가 없습니다. 잠시 후 다시 시도해주세요.');
+      }
+      
+      if (flavors.length === 0) {
+        throw new Error('사용 가능한 플레이버가 없습니다. 잠시 후 다시 시도해주세요.');
+      }
+      
       // 보안 그룹 설정
-      const security_groups = data.security_groups.map(sg => ({ name: sg }));
+      const security_groups = [{ name: data.security_groups || 'default' }];
+      
+      console.log('기본 설정:', {
+        name: data.name,
+        flavor: data.flavor_ref,
+        security_groups,
+        boot_source: data.boot_source
+      });
 
       // 부트 소스에 따른 설정
       let bootConfig: any = {};
       
       if (data.boot_source === 'image') {
+        if (!data.image_ref) {
+          throw new Error('이미지가 선택되지 않았습니다.');
+        }
+        
+        console.log(`이미지 부팅: ${data.image_ref}`);
+        
         bootConfig = {
           imageRef: data.image_ref
         };
       } else if (data.boot_source === 'volume') {
         // 볼륨에서 부팅하는 경우
-        bootConfig = {
-          block_device_mapping_v2: [{
+        if (!data.volume_source) {
+          throw new Error('볼륨 소스가 선택되지 않았습니다.');
+        }
+        
+        let blockDeviceMapping: any = {};
+        
+        if (data.volume_source === 'image') {
+          if (!data.image_ref) {
+            throw new Error('이미지가 선택되지 않았습니다.');
+          }
+          // 이미지에서 새 볼륨 생성
+          const selectedImageData = images.find(img => img.id === data.image_ref);
+          const minDiskSize = selectedImageData?.min_disk || 1;
+          const requestedSize = data.volume_size || 20;
+          const volumeSize = Math.max(requestedSize, minDiskSize, 1); // 최소 1GB 보장
+          
+          console.log(`선택된 이미지: ${selectedImageData?.name}, 최소 디스크: ${minDiskSize}GB, 설정 크기: ${volumeSize}GB`);
+          
+          blockDeviceMapping = {
             source_type: 'image',
             destination_type: 'volume',
             uuid: data.image_ref,
-            volume_size: data.volume_size,
+            volume_size: volumeSize,
+            boot_index: 0,
             delete_on_termination: data.delete_on_termination,
             ...(data.volume_type && { volume_type: data.volume_type })
+          };
+        } else if (data.volume_source === 'volume') {
+          if (!data.source_volume_id) {
+            throw new Error('사용할 볼륨이 선택되지 않았습니다.');
+          }
+          
+          // 기존 볼륨 사용
+          blockDeviceMapping = {
+            source_type: 'volume',
+            destination_type: 'volume',
+            uuid: data.source_volume_id,
+            boot_index: 0,
+            delete_on_termination: false // 기존 볼륨은 삭제하지 않음
+          };
+        } else if (data.volume_source === 'snapshot') {
+          if (!data.source_snapshot_id) {
+            throw new Error('사용할 스냅샷이 선택되지 않았습니다.');
+          }
+          // 스냅샷에서 볼륨 생성
+          const selectedSnapshot = snapshots.find(snap => snap.id === data.source_snapshot_id);
+          const snapshotSize = selectedSnapshot?.size || 20;
+          const requestedSize = data.volume_size || snapshotSize;
+          const volumeSize = Math.max(requestedSize, snapshotSize, 1); // 최소 1GB 보장
+          
+          console.log(`선택된 스냅샷: ${selectedSnapshot?.name}, 스냅샷 크기: ${snapshotSize}GB, 설정 크기: ${volumeSize}GB`);
+          
+          blockDeviceMapping = {
+            source_type: 'snapshot',
+            destination_type: 'volume',
+            uuid: data.source_snapshot_id,
+            volume_size: volumeSize,
+            boot_index: 0,
+            delete_on_termination: data.delete_on_termination,
+            ...(data.volume_type && { volume_type: data.volume_type })
+          };
+        }
+        
+        bootConfig = {
+          block_device_mapping_v2: [blockDeviceMapping]
+        };
+      } else if (data.boot_source === 'snapshot') {
+        if (!data.image_ref) {
+          throw new Error('스냅샷이 선택되지 않았습니다.');
+        }
+        
+        // 스냅샷에서 직접 부팅하는 경우 (볼륨 생성)
+        const selectedSnapshot = snapshots.find(snap => snap.id === data.image_ref);
+        if (!selectedSnapshot) {
+          throw new Error('선택된 스냅샷을 찾을 수 없습니다.');
+        }
+        const snapshotSize = selectedSnapshot.size || 20;
+        
+        console.log(`직접 스냅샷 부팅: ${selectedSnapshot?.name}, 크기: ${snapshotSize}GB`);
+        
+        bootConfig = {
+          block_device_mapping_v2: [{
+            source_type: 'snapshot',
+            destination_type: 'volume',
+            uuid: data.image_ref, // 스냅샷 ID가 image_ref에 저장됨
+            volume_size: snapshotSize,
+            boot_index: 0,
+            delete_on_termination: data.delete_on_termination
           }]
         };
       }
@@ -204,67 +504,244 @@ const CreateInstancePage: React.FC = () => {
           flavorRef: data.flavor_ref,
           networks,
           security_groups,
-          ...(data.description && { description: data.description }),
+
           ...(data.key_name && { key_name: data.key_name }),
           availability_zone: 'nova',
           ...(data.user_data && { user_data: btoa(data.user_data) }), // base64 encoding
-          ...(Object.keys(data.metadata).length > 0 && { metadata: data.metadata }),
+          ...(Object.keys(data.metadata).length > 0 || data.description ? { 
+            metadata: {
+              ...data.metadata,
+              ...(data.description && { description: data.description })
+            }
+          } : {}),
           min_count: 1,
           max_count: 1,
           ...bootConfig
         }
       };
 
-      console.log('Creating instance with data:', serverData);
+      console.log('==== 인스턴스 생성 요청 ====');
+      console.log('요청 데이터:', JSON.stringify(serverData, null, 2));
       
       const response = await novaService.createServer(serverData);
+      
+      console.log('==== 인스턴스 생성 응답 ====');
+      console.log('응답 데이터:', response);
+      
+      // 볼륨 이름 설정 (새 볼륨 생성인 경우)
+      if ((data.boot_source === 'volume' && data.volume_source === 'image') ||
+          (data.boot_source === 'volume' && data.volume_source === 'snapshot') ||
+          data.boot_source === 'snapshot') {
+        
+        console.log('볼륨 이름 설정을 위한 백그라운드 작업 시작...');
+        
+        // 백그라운드에서 볼륨 이름 설정 (더 안정적인 방법)
+        (async () => {
+          try {
+            console.log('🏷️ 볼륨 이름 설정 프로세스 시작...');
+            
+            // 인스턴스와 볼륨이 생성될 때까지 대기
+            let attempts = 0;
+            const maxAttempts = 20; // 최대 60초 대기
+            let attachedVolumes: any[] = [];
+            
+            while (attempts < maxAttempts) {
+              await new Promise(resolve => setTimeout(resolve, 3000)); // 3초 대기
+              attempts++;
+              
+              try {
+                const instanceDetail = await novaService.getServer(response.server.id);
+                attachedVolumes = instanceDetail.server.volumes_attached || [];
+                
+                console.log(`🔍 시도 ${attempts}: 연결된 볼륨 개수 ${attachedVolumes.length}`);
+                
+                if (attachedVolumes.length > 0) {
+                  // 볼륨이 연결되었으므로 이름 설정 시도
+                  break;
+                }
+              } catch (error) {
+                console.log(`🔍 시도 ${attempts}: 인스턴스 정보 가져오기 실패`);
+              }
+            }
+            
+            if (attachedVolumes.length > 0) {
+              // 모든 연결된 볼륨에 대해 이름 설정 (일반적으로 1개지만 여러 개일 수도 있음)
+              for (let i = 0; i < attachedVolumes.length; i++) {
+                const volume = attachedVolumes[i];
+                const volumeSuffix = attachedVolumes.length === 1 ? 'volume' : `volume_${i + 1}`;
+                const newVolumeName = `${data.name}_${volumeSuffix}`;
+                
+                try {
+                  console.log(`🏷️ 볼륨 ID ${volume.id}의 이름을 "${newVolumeName}"으로 변경 시도`);
+                  
+                  // 현재 볼륨 정보 확인
+                  const volumeDetail = await cinderService.getVolume(volume.id);
+                  const currentName = volumeDetail.volume?.name;
+                  
+                  // 이미 이름이 있고 기본 생성 이름이 아니면 건너뛰기
+                  if (currentName && 
+                      currentName !== volume.id && 
+                      !currentName.startsWith('volume-') && 
+                      currentName !== '이름 없음') {
+                    console.log(`🏷️ 볼륨 ${volume.id}에 이미 이름이 있음: "${currentName}". 건너뛰기.`);
+                    continue;
+                  }
+                  
+                  // 볼륨 이름 업데이트
+                  await cinderService.updateVolume(volume.id, {
+                    volume: {
+                      name: newVolumeName,
+                      description: `${data.name} 인스턴스의 ${i === 0 ? '부트' : '추가'} 볼륨`
+                    }
+                  });
+                  
+                  console.log(`✅ 볼륨 ${volume.id} 이름 설정 완료: "${newVolumeName}"`);
+                } catch (volumeUpdateError) {
+                  console.error(`❌ 볼륨 ${volume.id} 이름 설정 실패:`, volumeUpdateError);
+                }
+              }
+            } else {
+              console.log('⚠️ 연결된 볼륨을 찾을 수 없습니다. 볼륨 이름 설정을 건너뜁니다.');
+            }
+          } catch (volumeNameError) {
+            console.error('❌ 볼륨 이름 설정 프로세스 실패:', volumeNameError);
+            // 볼륨 이름 설정 실패는 인스턴스 생성 성공에 영향주지 않음
+          }
+        })();
+      }
       
       // 유동 IP 자동 할당
       if (data.auto_assign_floating_ip && response.server?.id) {
         // 백그라운드에서 유동 IP 할당 처리
         (async () => {
           try {
+            // 먼저 현재 네트워크와 유동 IP 상황 파악
+            console.log('=== 유동 IP 할당 시작 ===');
+            
+            // 네트워크 정보 먼저 가져오기
+            const networks = await neutronService.getNetworks();
+            const floatingIPs = await neutronService.getFloatingIps();
+            
+            console.log('전체 네트워크 목록:');
+            networks.networks?.forEach((net: any) => {
+              console.log(`- ${net.name}: external=${net['router:external']}, provider=${net.provider_network_type}, id=${net.id}`);
+            });
+            
+            console.log('현재 유동 IP 목록:');
+            floatingIPs.floatingips?.forEach((fip: any) => {
+              console.log(`- ${fip.floating_ip_address}: 사용중=${!!fip.port_id}, 네트워크ID=${fip.floating_network_id}`);
+            });
+            
+            // 외부 네트워크 찾기 (여러 방법 시도)
+            let externalNetwork = null;
+            
+            // 방법 1: router:external = true
+            externalNetwork = networks.networks?.find((net: any) => net['router:external'] === true);
+            if (externalNetwork) {
+              console.log('방법 1 성공: router:external=true 네트워크 발견:', externalNetwork.name);
+            } else {
+              console.log('방법 1 실패: router:external=true 네트워크 없음');
+              
+              // 방법 2: 172.30 대역 네트워크 찾기 (사용자 환경 기준)
+              externalNetwork = networks.networks?.find((net: any) => 
+                net.name.includes('172.30') || net.name.includes('external') || net.name.includes('public')
+              );
+              if (externalNetwork) {
+                console.log('방법 2 성공: 이름 패턴으로 네트워크 발견:', externalNetwork.name);
+              } else {
+                console.log('방법 2 실패: 이름 패턴 매칭 실패');
+                
+                // 방법 3: 기존 유동 IP로부터 네트워크 추정
+                const existingFloatingIP = floatingIPs.floatingips?.find((fip: any) => 
+                  fip.floating_ip_address.startsWith('172.30')
+                );
+                if (existingFloatingIP) {
+                  externalNetwork = networks.networks?.find((net: any) => 
+                    net.id === existingFloatingIP.floating_network_id
+                  );
+                  if (externalNetwork) {
+                    console.log('방법 3 성공: 기존 유동 IP로부터 네트워크 추정:', externalNetwork.name);
+                  }
+                }
+              }
+            }
+            
+            if (!externalNetwork) {
+              // 방법 4: 첫 번째 사용 가능한 네트워크 (마지막 수단)
+              externalNetwork = networks.networks?.[0];
+              console.log('방법 4: 첫 번째 네트워크 사용 (마지막 수단):', externalNetwork?.name);
+            }
+            
+            console.log('최종 선택된 외부 네트워크:', externalNetwork);
+            
+            if (!externalNetwork) {
+              throw new Error('외부 네트워크를 찾을 수 없습니다.');
+            }
+
             // 인스턴스가 ACTIVE 상태가 될 때까지 대기
             let attempts = 0;
-            const maxAttempts = 30; // 최대 5분 대기
+            const maxAttempts = 60; // 최대 10분 대기
             
             while (attempts < maxAttempts) {
               await new Promise(resolve => setTimeout(resolve, 10000)); // 10초 대기
               
               try {
                 const serverStatus = await novaService.getServer(response.server.id);
+                console.log(`인스턴스 상태: ${serverStatus.server.status} (시도: ${attempts + 1}/${maxAttempts})`);
+                
                 if (serverStatus.server.status === 'ACTIVE') {
-                  // 먼저 사용 가능한 유동 IP 찾기
-                  const floatingIPs = await neutronService.getFloatingIps();
-                  const availableIP = floatingIPs.floatingips?.find((fip: any) => !fip.port_id);
+                  console.log('인스턴스가 ACTIVE 상태가 되었습니다. 유동 IP 할당을 시작합니다...');
+                  
+                  // 사용 가능한 유동 IP 다시 확인
+                  const currentFloatingIPs = await neutronService.getFloatingIps();
+                  const availableIP = currentFloatingIPs.floatingips?.find((fip: any) => !fip.port_id);
                   
                   let floatingIPAddress = '';
                   
                   if (availableIP) {
+                    console.log('기존 유동 IP 사용:', availableIP.floating_ip_address);
                     floatingIPAddress = availableIP.floating_ip_address;
                   } else {
-                    // 새로운 유동 IP 생성
-                    const networks = await neutronService.getNetworks();
-                    const externalNetwork = networks.networks?.find((net: any) => 
-                      net['router:external'] === true || net.name.includes('external') || net.name.includes('public')
-                    );
-                    
-                    if (externalNetwork) {
-                      const newFloatingIP = await neutronService.createFloatingIP({
-                        floating_network_id: externalNetwork.id
-                      });
+                    console.log('새로운 유동 IP 생성 중...');
+                    try {
+                      const floatingIPRequest = {
+                        floatingip: {
+                          floating_network_id: externalNetwork.id
+                        }
+                      };
+                      console.log('유동 IP 생성 요청:', floatingIPRequest);
+                      
+                      const newFloatingIP = await neutronService.createFloatingIP(floatingIPRequest);
+                      console.log('새로 생성된 유동 IP 응답:', newFloatingIP);
+                      
                       if (newFloatingIP.floatingip) {
                         floatingIPAddress = newFloatingIP.floatingip.floating_ip_address;
+                        console.log('새로운 유동 IP 주소:', floatingIPAddress);
                       }
+                    } catch (createError) {
+                      console.error('유동 IP 생성 실패:', createError);
+                      throw createError;
                     }
                   }
                   
                   if (floatingIPAddress) {
-                    await novaService.attachFloatingIP(response.server.id, floatingIPAddress);
-                    toast.success(`유동 IP ${floatingIPAddress}가 자동으로 할당되었습니다.`);
+                    console.log('유동 IP 연결 시도:', floatingIPAddress);
+                    try {
+                      await novaService.attachFloatingIP(response.server.id, floatingIPAddress);
+                      toast.success(`유동 IP ${floatingIPAddress}가 자동으로 할당되었습니다.`);
+                      console.log('유동 IP 할당 성공!');
+                                         } catch (attachError: any) {
+                       console.error('유동 IP 연결 실패:', attachError);
+                       toast.error(`유동 IP 연결에 실패했습니다: ${attachError.message || '연결 오류'}`);
+                     }
                   } else {
-                    toast.error('유동 IP 할당에 실패했습니다: 외부 네트워크를 찾을 수 없습니다.');
+                    console.error('유동 IP 주소를 얻을 수 없습니다.');
+                    toast.error('유동 IP 할당에 실패했습니다: IP 주소를 얻을 수 없습니다.');
                   }
+                  break;
+                } else if (serverStatus.server.status === 'ERROR') {
+                  console.error('인스턴스가 오류 상태입니다.');
+                  toast.error('인스턴스가 오류 상태로 인해 유동 IP를 할당할 수 없습니다.');
                   break;
                 }
               } catch (checkError) {
@@ -275,20 +752,44 @@ const CreateInstancePage: React.FC = () => {
             }
             
             if (attempts >= maxAttempts) {
-              toast.error('유동 IP 할당 시간이 초과되었습니다.');
+              console.error('유동 IP 할당 시간 초과');
+              toast.error('유동 IP 할당 시간이 초과되었습니다. 인스턴스 생성 후 수동으로 할당해주세요.');
             }
-          } catch (ipError) {
-            console.error('유동 IP 할당 실패:', ipError);
-            toast.error('유동 IP 할당에 실패했습니다.');
+          } catch (ipError: any) {
+            console.error('유동 IP 할당 프로세스 실패:', ipError);
+            toast.error(`유동 IP 할당에 실패했습니다: ${ipError.message || '알 수 없는 오류'}`);
+          } finally {
+            console.log('=== 유동 IP 할당 종료 ===');
           }
         })();
       }
       
       toast.success('가상머신 생성이 시작되었습니다!');
       navigate('/compute');
-    } catch (error) {
+    } catch (error: any) {
       console.error('인스턴스 생성 실패:', error);
-      toast.error('가상머신 생성에 실패했습니다.');
+      
+      // 상세한 오류 메시지 추출
+      let errorMessage = '가상머신 생성에 실패했습니다.';
+      
+      if (error.response?.data) {
+        const errorData = error.response.data;
+        console.error('오류 상세 정보:', JSON.stringify(errorData, null, 2));
+        
+        if (errorData.badRequest?.message) {
+          errorMessage = `생성 실패: ${errorData.badRequest.message}`;
+        } else if (errorData.fault?.message) {
+          errorMessage = `생성 실패: ${errorData.fault.message}`;
+        } else if (errorData.computeFault?.message) {
+          errorMessage = `생성 실패: ${errorData.computeFault.message}`;
+        } else if (typeof errorData === 'string') {
+          errorMessage = `생성 실패: ${errorData}`;
+        }
+      } else if (error.message) {
+        errorMessage = `생성 실패: ${error.message}`;
+      }
+      
+      toast.error(errorMessage);
     } finally {
       setCreating(false);
     }
@@ -333,6 +834,14 @@ const CreateInstancePage: React.FC = () => {
   useEffect(() => {
     loadData();
   }, []);
+
+  // 스냅샷 상태 변경 시 로그 출력 (디버깅용)
+  useEffect(() => {
+    console.log('🔄 인스턴스 생성 페이지 스냅샷 상태 업데이트:', {
+      count: snapshots.length,
+      snapshots: snapshots.map((s: any) => ({ id: s.id, name: s.name, status: s.status }))
+    });
+  }, [snapshots]);
 
   if (loading) {
     return (
@@ -492,8 +1001,9 @@ const CreateInstancePage: React.FC = () => {
             </div>
 
             {/* 이미지 선택 */}
-            <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-6">이미지 선택</h3>
+            {bootSource === 'image' && (
+              <div className="bg-white rounded-lg shadow p-6">
+                <h3 className="text-lg font-medium text-gray-900 mb-6">이미지 선택</h3>
               <Controller
                 name="image_ref"
                 control={control}
@@ -538,65 +1048,365 @@ const CreateInstancePage: React.FC = () => {
                 <p className="mt-2 text-sm text-red-600">{errors.image_ref.message}</p>
               )}
             </div>
+            )}
+
+            {/* 스냅샷 선택 */}
+            {bootSource === 'snapshot' && (
+              <div className="bg-white rounded-lg shadow p-6">
+                <h3 className="text-lg font-medium text-gray-900 mb-6">스냅샷 선택</h3>
+                <Controller
+                  name="image_ref"
+                  control={control}
+                  rules={{ required: '스냅샷을 선택해주세요' }}
+                  render={({ field }) => (
+                    <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
+                      {snapshots.length > 0 ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {snapshots.map(snapshot => (
+                            <label key={snapshot.id} className="relative">
+                              <input
+                                type="radio"
+                                value={snapshot.id}
+                                checked={field.value === snapshot.id}
+                                onChange={field.onChange}
+                                className="sr-only"
+                              />
+                              <div className={`p-4 border-2 rounded-lg cursor-pointer transition-colors ${
+                                field.value === snapshot.id
+                                  ? 'border-blue-500 bg-blue-50'
+                                  : 'border-gray-200 hover:border-gray-300'
+                              }`}>
+                                <div className="flex items-center mb-2">
+                                  <ImageIcon className="h-5 w-5 text-gray-400 mr-2" />
+                                  <p className="font-medium truncate">{snapshot.name || `스냅샷 ${snapshot.id.slice(0, 8)}`}</p>
+                                </div>
+                                <div className="text-sm text-gray-500 space-y-1">
+                                  <p>타입: {snapshot.snapshot_type === 'volume' ? '볼륨 스냅샷' : '이미지 스냅샷'}</p>
+                                  <p>크기: {snapshot.size || '-'}GB</p>
+                                  <p>상태: {snapshot.status}</p>
+                                  <p>생성일: {new Date(snapshot.created_at).toLocaleDateString()}</p>
+                                </div>
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-8">
+                          <p className="text-gray-500 mb-2">사용 가능한 스냅샷이 없습니다.</p>
+                          <p className="text-xs text-gray-400">
+                            스냅샷 개수: {snapshots.length}개
+                            (콘솔 로그를 확인해보세요)
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                />
+                {errors.image_ref && (
+                  <p className="mt-2 text-sm text-red-600">{errors.image_ref.message}</p>
+                )}
+              </div>
+            )}
 
             {/* 볼륨 설정 (볼륨 부팅 시) */}
             {bootSource === 'volume' && (
               <div className="bg-white rounded-lg shadow p-6">
                 <h3 className="text-lg font-medium text-gray-900 mb-6">볼륨 설정</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      볼륨 크기 (GB)
-                    </label>
-                    <Controller
-                      name="volume_size"
-                      control={control}
-                      render={({ field }) => (
-                        <input
-                          {...field}
-                          type="number"
-                          min="1"
-                          className="input w-full"
-                          placeholder="20"
-                        />
-                      )}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      볼륨 타입
-                    </label>
-                    <Controller
-                      name="volume_type"
-                      control={control}
-                      render={({ field }) => (
-                        <select {...field} className="input w-full">
-                          <option value="">기본값</option>
-                          {volumeTypes.map(vt => (
-                            <option key={vt.id} value={vt.name}>{vt.name}</option>
-                          ))}
-                        </select>
-                      )}
-                    />
-                  </div>
+                
+                {/* 볼륨 소스 선택 */}
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-gray-700 mb-3">볼륨 소스</label>
+                  <Controller
+                    name="volume_source"
+                    control={control}
+                    render={({ field }) => (
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        {[
+                          { value: 'image', label: '새 볼륨 생성 (이미지)', desc: '이미지로부터 새 볼륨 생성', icon: '🖼️' },
+                          { value: 'volume', label: '기존 볼륨 선택', desc: '사용 가능한 볼륨 선택', icon: '💽' },
+                          { value: 'snapshot', label: '스냅샷에서 생성', desc: '볼륨 스냅샷으로부터 생성', icon: '📸' }
+                        ].map(option => (
+                          <label key={option.value} className="relative">
+                            <input
+                              type="radio"
+                              value={option.value}
+                              checked={field.value === option.value}
+                              onChange={field.onChange}
+                              className="sr-only"
+                            />
+                            <div className={`p-4 border-2 rounded-lg cursor-pointer transition-colors ${
+                              field.value === option.value
+                                ? 'border-blue-500 bg-blue-50'
+                                : 'border-gray-200 hover:border-gray-300'
+                            }`}>
+                              <div className="text-center">
+                                <div className="text-2xl mb-2">{option.icon}</div>
+                                <p className="font-medium text-sm">{option.label}</p>
+                                <p className="text-xs text-gray-500 mt-1">{option.desc}</p>
+                              </div>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  />
                 </div>
-                <div className="mt-4">
-                  <label className="flex items-center">
-                    <Controller
-                      name="delete_on_termination"
-                      control={control}
-                      render={({ field }) => (
-                        <input
-                          type="checkbox"
-                          checked={field.value}
-                          onChange={field.onChange}
-                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+
+                {/* 이미지에서 새 볼륨 생성 */}
+                {volumeSource === 'image' && (
+                  <div className="space-y-4 p-4 bg-blue-50 rounded-lg">
+                    <h4 className="font-medium text-gray-900">이미지에서 새 볼륨 생성</h4>
+                    
+                    {/* 이미지 선택 */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">이미지 선택</label>
+                      <Controller
+                        name="image_ref"
+                        control={control}
+                        rules={{ required: volumeSource === 'image' ? '이미지를 선택해주세요' : false }}
+                        render={({ field }) => (
+                          <select 
+                            {...field} 
+                            className="input w-full"
+                            onChange={(e) => {
+                              field.onChange(e);
+                              // 이미지 선택 시 볼륨 크기 자동 설정
+                              const selectedImg = images.find(img => img.id === e.target.value);
+                              if (selectedImg && selectedImg.min_disk > 0) {
+                                const currentVolumeSize = watch('volume_size');
+                                if (!currentVolumeSize || currentVolumeSize < selectedImg.min_disk) {
+                                  setValue('volume_size', selectedImg.min_disk);
+                                }
+                              }
+                            }}
+                          >
+                            <option value="">이미지를 선택하세요</option>
+                            {images.map(img => (
+                              <option key={img.id} value={img.id}>
+                                {img.name} {img.min_disk > 0 && `(최소 ${img.min_disk}GB)`}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">볼륨 크기 (GB)</label>
+                        <Controller
+                          name="volume_size"
+                          control={control}
+                          rules={{
+                            required: '볼륨 크기를 입력해주세요',
+                            min: {
+                              value: 1,
+                              message: '볼륨 크기는 최소 1GB여야 합니다'
+                            },
+                            validate: (value) => {
+                              if (!value) return true; // 값이 없으면 required 규칙에서 처리
+                              const selectedImg = images.find(img => img.id === selectedImage);
+                              const minSize = selectedImg?.min_disk || 1;
+                              if (value < minSize) {
+                                return `선택된 이미지는 최소 ${minSize}GB가 필요합니다`;
+                              }
+                              return true;
+                            }
+                          }}
+                          render={({ field }) => {
+                            const selectedImg = images.find(img => img.id === selectedImage);
+                            const minSize = selectedImg?.min_disk || 1;
+                            return (
+                              <div>
+                                <input
+                                  {...field}
+                                  type="number"
+                                  min={minSize}
+                                  className={`input w-full ${errors.volume_size ? 'border-red-500' : ''}`}
+                                  placeholder={`최소 ${minSize}GB`}
+                                  onChange={(e) => {
+                                    const value = parseInt(e.target.value) || 0;
+                                    field.onChange(value);
+                                  }}
+                                />
+                                {selectedImg && (
+                                  <p className="text-xs text-gray-500 mt-1">
+                                    선택된 이미지 최소 크기: {minSize}GB
+                                  </p>
+                                )}
+                                {errors.volume_size && (
+                                  <p className="text-xs text-red-600 mt-1">{errors.volume_size.message}</p>
+                                )}
+                              </div>
+                            );
+                          }}
                         />
-                      )}
-                    />
-                    <span className="ml-2 text-sm text-gray-700">인스턴스 삭제 시 볼륨도 함께 삭제</span>
-                  </label>
-                </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">볼륨 타입</label>
+                        <Controller
+                          name="volume_type"
+                          control={control}
+                          render={({ field }) => (
+                            <select {...field} className="input w-full">
+                              <option value="">기본값</option>
+                              {volumeTypes.map(vt => (
+                                <option key={vt.id} value={vt.name}>{vt.name}</option>
+                              ))}
+                            </select>
+                          )}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 기존 볼륨 선택 */}
+                {volumeSource === 'volume' && (
+                  <div className="space-y-4 p-4 bg-green-50 rounded-lg">
+                    <h4 className="font-medium text-gray-900">기존 볼륨 선택</h4>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">사용 가능한 볼륨</label>
+                      <Controller
+                        name="source_volume_id"
+                        control={control}
+                        rules={{ required: volumeSource === 'volume' ? '볼륨을 선택해주세요' : false }}
+                        render={({ field }) => (
+                          <div className="space-y-3">
+                            {availableVolumes.length > 0 ? (
+                              <div className="max-h-60 overflow-y-auto border rounded-lg">
+                                {availableVolumes.map(volume => (
+                                  <label key={volume.id} className="flex items-center p-3 hover:bg-gray-50 border-b last:border-b-0">
+                                    <input
+                                      type="radio"
+                                      value={volume.id}
+                                      checked={field.value === volume.id}
+                                      onChange={field.onChange}
+                                      className="mr-3"
+                                    />
+                                    <div className="flex-1">
+                                      <p className="font-medium">{volume.name || volume.id}</p>
+                                      <div className="text-sm text-gray-500 grid grid-cols-2 gap-4">
+                                        <span>크기: {volume.size}GB</span>
+                                        <span>타입: {volume.volume_type || '기본값'}</span>
+                                        <span>상태: {volume.status}</span>
+                                        <span>생성일: {new Date(volume.created_at).toLocaleDateString()}</span>
+                                      </div>
+                                    </div>
+                                  </label>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-gray-500 text-center py-4">사용 가능한 볼륨이 없습니다.</p>
+                            )}
+                          </div>
+                        )}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* 스냅샷에서 볼륨 생성 */}
+                {volumeSource === 'snapshot' && (
+                  <div className="space-y-4 p-4 bg-purple-50 rounded-lg">
+                    <h4 className="font-medium text-gray-900">스냅샷에서 볼륨 생성</h4>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">스냅샷 선택</label>
+                      <Controller
+                        name="source_snapshot_id"
+                        control={control}
+                        rules={{ required: volumeSource === 'snapshot' ? '스냅샷을 선택해주세요' : false }}
+                        render={({ field }) => (
+                          <div className="space-y-3">
+                            {snapshots.length > 0 ? (
+                              <div className="max-h-60 overflow-y-auto border rounded-lg">
+                                {snapshots.map(snapshot => (
+                                  <label key={snapshot.id} className="flex items-center p-3 hover:bg-gray-50 border-b last:border-b-0">
+                                    <input
+                                      type="radio"
+                                      value={snapshot.id}
+                                      checked={field.value === snapshot.id}
+                                      onChange={field.onChange}
+                                      className="mr-3"
+                                    />
+                                    <div className="flex-1">
+                                      <p className="font-medium">{snapshot.name || `스냅샷-${snapshot.id.slice(0, 8)}`}</p>
+                                      <div className="text-sm text-gray-500 grid grid-cols-2 gap-4">
+                                        <span>타입: {snapshot.snapshot_type === 'volume' ? '볼륨' : '이미지'}</span>
+                                        <span>크기: {snapshot.size || '-'}GB</span>
+                                        <span>상태: {snapshot.status}</span>
+                                        <span>생성일: {new Date(snapshot.created_at).toLocaleDateString()}</span>
+                                      </div>
+                                    </div>
+                                  </label>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="text-center py-4">
+                                <p className="text-gray-500 mb-2">사용 가능한 스냅샷이 없습니다.</p>
+                                <p className="text-xs text-gray-400">
+                                  스냅샷 개수: {snapshots.length}개
+                                  (콘솔 로그를 확인해보세요)
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      />
+                    </div>
+
+                    {selectedSnapshot && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">볼륨 크기 (GB)</label>
+                        <Controller
+                          name="volume_size"
+                          control={control}
+                          render={({ field }) => {
+                            const selectedSnap = snapshots.find(snap => snap.id === selectedSnapshot);
+                            const minSize = selectedSnap?.size || 1;
+                            return (
+                              <div>
+                                <input
+                                  {...field}
+                                  type="number"
+                                  min={minSize}
+                                  className="input w-full"
+                                  placeholder={`최소 ${minSize}GB (스냅샷 크기)`}
+                                />
+                                <p className="text-xs text-gray-500 mt-1">
+                                  스냅샷 크기: {minSize}GB (이 크기보다 크게 설정 가능)
+                                </p>
+                              </div>
+                            );
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 공통 옵션 */}
+                {volumeSource !== 'volume' && (
+                  <div className="mt-6 pt-4 border-t border-gray-200">
+                    <label className="flex items-center">
+                      <Controller
+                        name="delete_on_termination"
+                        control={control}
+                        render={({ field }) => (
+                          <input
+                            type="checkbox"
+                            checked={field.value}
+                            onChange={field.onChange}
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                        )}
+                      />
+                      <span className="ml-2 text-sm text-gray-700">인스턴스 삭제 시 볼륨도 함께 삭제</span>
+                    </label>
+                  </div>
+                )}
               </div>
             )}
 
@@ -715,21 +1525,17 @@ const CreateInstancePage: React.FC = () => {
                 control={control}
                 render={({ field }) => (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {securityGroups.map(sg => (
+                    {securityGroups
+                      .filter((sg, index, self) => 
+                        index === self.findIndex(s => s.name === sg.name)
+                      )
+                      .map(sg => (
                       <label key={sg.id} className="flex items-center p-3 border border-gray-200 rounded-lg hover:bg-gray-50">
                         <input
-                          type="checkbox"
-                          checked={field.value.includes(sg.name)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              // 중복 선택 방지
-                              if (!field.value.includes(sg.name)) {
-                                field.onChange([...field.value, sg.name]);
-                              }
-                            } else {
-                              field.onChange(field.value.filter(name => name !== sg.name));
-                            }
-                          }}
+                          type="radio"
+                          name="security_group_radio"
+                          checked={field.value === sg.name}
+                          onChange={() => field.onChange(sg.name)}
                           className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
                         <div className="ml-3">
@@ -823,7 +1629,7 @@ const CreateInstancePage: React.FC = () => {
                 render={({ field }) => (
                   <textarea
                     {...field}
-                    rows={15}
+                    rows={45}
                     className="input w-full font-mono text-sm"
                     placeholder={`#!/bin/bash
 # 패키지 업데이트
@@ -946,7 +1752,7 @@ echo '<h1>Hello from OpenStack!</h1>' > /var/www/html/index.html`}
                   </div>
                   <div>
                     <dt className="text-sm font-medium text-gray-500">보안 그룹</dt>
-                    <dd className="text-sm text-gray-900">{watch('security_groups').join(', ')}</dd>
+                    <dd className="text-sm text-gray-900">{watch('security_groups')}</dd>
                   </div>
                   <div>
                     <dt className="text-sm font-medium text-gray-500">키 페어</dt>
@@ -1029,8 +1835,7 @@ echo '<h1>Hello from OpenStack!</h1>' > /var/www/html/index.html`}
                   setSecurityGroups(prev => [...prev, newSecurityGroup.security_group]);
                   
                   // 폼에서 자동 선택
-                  const currentSelected = watch('security_groups');
-                  setValue('security_groups', [...currentSelected, newSecurityGroup.security_group.name]);
+                  setValue('security_groups', newSecurityGroup.security_group.name);
                   
                   toast.success('보안그룹이 생성되었습니다.');
                   setShowCreateSecurityGroup(false);
