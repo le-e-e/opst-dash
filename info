@@ -1,0 +1,21 @@
+서비스	타입	엔드포인트 URL
+Keystone	http://192.168.0.25:5000
+Nova	http://192.168.0.25:8774/v2.1
+Neutron	http://192.168.0.25:9696
+Glance	http://192.168.0.25:9292
+Placement	http://192.168.0.25:8780
+Heat	http://192.168.0.25:8004/v1/%(tenant_id)s
+Heat-cfn	http://192.168.0.25:8000/v1
+
+export OS_PROJECT_DOMAIN_NAME='Default'
+export OS_USER_DOMAIN_NAME='Default'
+export OS_PROJECT_NAME='admin'
+export OS_TENANT_NAME='admin'
+export OS_USERNAME='admin'
+export OS_PASSWORD='z4gERtPDjxYg2se2OONUkyqsbuCKOyiiwg8vkpLt'
+export OS_AUTH_URL='http://192.168.0.25:5000'
+export OS_INTERFACE='internal'
+export OS_ENDPOINT_TYPE='internalURL'
+export OS_IDENTITY_API_VERSION='3'
+export OS_REGION_NAME='RegionOne'
+export OS_AUTH_PLUGIN='password'
