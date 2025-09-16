@@ -76,15 +76,15 @@ const AdminManagementPage: React.FC = () => {
   });
 
   // 대기 중인 사용자 로드 함수를 외부로 분리
-  const loadPendingData = async () => {
+  const loadPendingData = () => {
     try {
-      console.log('🔍 관리자 페이지에서 대기 중인 사용자 로드 시작');
-      const pending = await loadPendingUsers();
-      console.log('🔍 로드된 대기 중인 사용자:', pending);
+      console.log('🔍 관리자 페이지에서 파일 기반 대기 사용자 로드 시작');
+      const pending = loadPendingUsers();
+      console.log('🔍 파일에서 로드된 대기 중인 사용자:', pending);
       setPendingUsers(pending);
       console.log('🔍 pendingUsers state 업데이트 완료');
     } catch (error) {
-      console.error('대기 중인 사용자 로드 실패:', error);
+      console.error('파일 기반 대기 사용자 로드 실패:', error);
     }
   };
 
@@ -169,6 +169,51 @@ const AdminManagementPage: React.FC = () => {
     } catch (error) {
       toast.error('사용자 거부에 실패했습니다.');
     }
+  };
+
+  // JSON 파일 업로드 처리
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const jsonData = JSON.parse(e.target?.result as string);
+        
+        // 단일 사용자 객체인지 확인
+        if (jsonData.id && jsonData.username && jsonData.name) {
+          // 기존 대기 사용자 목록 가져오기
+          const existingUsers = JSON.parse(localStorage.getItem('pending-users') || '[]');
+          
+          // 중복 확인
+          const isDuplicate = existingUsers.some((user: any) => user.id === jsonData.id || user.username === jsonData.username);
+          
+          if (isDuplicate) {
+            toast.error(`사용자 "${jsonData.username}"이 이미 대기열에 있습니다.`);
+            return;
+          }
+          
+          // 대기열에 추가
+          const updatedUsers = [...existingUsers, jsonData];
+          localStorage.setItem('pending-users', JSON.stringify(updatedUsers));
+          
+          // 화면 새로고침
+          loadPendingData();
+          
+          toast.success(`${jsonData.name} (${jsonData.username}) 사용자가 대기열에 추가되었습니다.`);
+        } else {
+          toast.error('올바른 회원가입 요청 파일이 아닙니다.');
+        }
+      } catch (error) {
+        toast.error('JSON 파일을 읽는데 실패했습니다.');
+      }
+    };
+    
+    reader.readAsText(file);
+    
+    // 파일 input 초기화
+    event.target.value = '';
   };
 
   // 관리자가 아닌 경우 접근 제한
@@ -428,13 +473,25 @@ const AdminManagementPage: React.FC = () => {
                             승인 대기 중인 사용자 ({pendingUsers.length}명)
                           </h3>
                         </div>
-                        <button
-                          onClick={loadPendingData}
-                          className="flex items-center px-3 py-1 text-sm bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
-                        >
-                          <RefreshCw className="h-4 w-4 mr-1" />
-                          새로고침
-                        </button>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={loadPendingData}
+                            className="flex items-center px-3 py-1 text-sm bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
+                          >
+                            <RefreshCw className="h-4 w-4 mr-1" />
+                            새로고침
+                          </button>
+                          <label className="flex items-center px-3 py-1 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 cursor-pointer">
+                            <UserPlus className="h-4 w-4 mr-1" />
+                            JSON 업로드
+                            <input
+                              type="file"
+                              accept=".json"
+                              className="hidden"
+                              onChange={handleFileUpload}
+                            />
+                          </label>
+                        </div>
                       </div>
                       {pendingUsers.length > 0 ? (
                         <div className="space-y-3">

@@ -201,6 +201,56 @@ const NetworkPage: React.FC = () => {
     }
   };
 
+  const handleSetupDefaultNetwork = async () => {
+    if (!confirm('기본 네트워크 인프라를 설정하시겠습니까?\n\n이 작업은 다음을 확인/생성합니다:\n\n📡 외부 네트워크\n   - 외부 인터넷과 연결되는 네트워크\n   - 유동 IP 풀 제공\n\n🏠 내부 네트워크 (internal-network)\n   - 인스턴스끼리 통신하는 내부망\n   - 서브넷: 192.168.1.0/24\n\n🔀 기본 라우터 (default-router)\n   - 내부 ↔ 외부 네트워크 간 NAT\n   - 외부 네트워크를 게이트웨이로 설정\n\n🛡️ 기본 보안그룹\n   - SSH(22), HTTP(80), HTTPS(443) 허용\n\n기존 리소스가 있으면 재사용하고, 없으면 새로 생성합니다.')) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      toast.loading('기본 네트워크 인프라를 설정하고 있습니다...', { duration: 0 });
+      
+      const result = await neutronService.setupDefaultNetworkInfrastructure();
+      
+      toast.dismiss();
+      toast.success('기본 네트워크 인프라 설정이 완료되었습니다!');
+      
+      // 네트워크 데이터 새로고침
+      await fetchNetworkData();
+      
+      console.log('네트워크 인프라 설정 결과:', result);
+    } catch (error: any) {
+      console.error('기본 네트워크 설정 실패:', error);
+      toast.dismiss();
+      
+      // 상세한 에러 메시지 표시
+      let errorMessage = '기본 네트워크 설정에 실패했습니다.';
+      
+      if (error.response?.data) {
+        const errorData = error.response.data;
+        if (errorData.error?.message) {
+          errorMessage = `네트워크 설정 실패: ${errorData.error.message}`;
+        } else if (errorData.message) {
+          errorMessage = `네트워크 설정 실패: ${errorData.message}`;
+        }
+      } else if (error.message) {
+        errorMessage = `네트워크 설정 실패: ${error.message}`;
+      }
+      
+      toast.error(errorMessage, { duration: 10000 });
+      
+      // 콘솔에 상세 에러 정보 출력
+      console.error('상세 에러 정보:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        config: error.config
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const resetRuleForm = () => {
     setRuleFormData({
       direction: 'ingress',
@@ -522,13 +572,24 @@ const NetworkPage: React.FC = () => {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">네트워크 관리</h1>
-        <button
-          onClick={fetchNetworkData}
-          className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-        >
-          <RefreshCw className="h-4 w-4 mr-2" />
-          새로고침
-        </button>
+        <div className="flex space-x-3">
+          <button
+            onClick={handleSetupDefaultNetwork}
+            className="flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+            disabled={loading}
+          >
+            <Settings className="h-4 w-4 mr-2" />
+            네트워크 설정
+          </button>
+          <button
+            onClick={fetchNetworkData}
+            className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            disabled={loading}
+          >
+            <RefreshCw className="h-4 w-4 mr-2" />
+            새로고침
+          </button>
+        </div>
       </div>
 
       {/* 탭 네비게이션 */}

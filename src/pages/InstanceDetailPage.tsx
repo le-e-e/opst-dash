@@ -25,7 +25,8 @@ import {
   Database,
   Unlink,
   Link,
-  Plus
+  Plus,
+  Maximize2
 } from 'lucide-react';
 import { novaService, neutronService, cinderService, glanceService } from '../services/openstack';
 import toast from 'react-hot-toast';
@@ -146,6 +147,159 @@ const InstanceDetailPage: React.FC = () => {
       setActiveTab('console');
     } catch (error) {
       console.error('VNC 콘솔 열기 실패:', error);
+      toast.error('VNC 콘솔을 열 수 없습니다.');
+    }
+  };
+
+  const handleVNCConsoleFullscreen = async () => {
+    if (!instanceId) return;
+    
+    try {
+      const response = await novaService.getVNCConsole(instanceId);
+      const vncUrl = response.console.url;
+      
+      // 새 탭에서 전체화면으로 열기
+      const newWindow = window.open('', '_blank', 'width=1200,height=800,scrollbars=yes,resizable=yes');
+      
+      if (newWindow) {
+        newWindow.document.write(`
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>VNC Console - ${instance?.name || 'Instance'}</title>
+            <style>
+              body {
+                margin: 0;
+                padding: 0;
+                background: #000;
+                overflow: hidden;
+              }
+              .vnc-container {
+                width: 100vw;
+                height: 100vh;
+                display: flex;
+                flex-direction: column;
+              }
+              .vnc-header {
+                background: #1f2937;
+                color: white;
+                padding: 8px 16px;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                font-size: 14px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                border-bottom: 1px solid #374151;
+              }
+              .vnc-title {
+                font-weight: 600;
+              }
+              .vnc-controls {
+                display: flex;
+                gap: 8px;
+              }
+              .vnc-btn {
+                background: #374151;
+                border: none;
+                color: white;
+                padding: 4px 8px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 12px;
+              }
+              .vnc-btn:hover {
+                background: #4b5563;
+              }
+              .vnc-frame {
+                flex: 1;
+                border: none;
+                background: #000;
+              }
+              .loading {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100%;
+                color: #9ca3af;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="vnc-container">
+              <div class="vnc-header">
+                <div class="vnc-title">VNC Console - ${instance?.name || 'Instance'}</div>
+                <div class="vnc-controls">
+                  <button class="vnc-btn" onclick="window.close()">닫기</button>
+                  <button class="vnc-btn" onclick="toggleFullscreen()">전체화면</button>
+                  <button class="vnc-btn" onclick="refreshConsole()">새로고침</button>
+                </div>
+              </div>
+              <iframe 
+                id="vnc-frame"
+                class="vnc-frame" 
+                src="${vncUrl}"
+                title="VNC Console"
+                sandbox="allow-same-origin allow-scripts allow-forms"
+                onload="hideLoading()"
+              ></iframe>
+              <div id="loading" class="loading">
+                VNC 콘솔을 로딩 중입니다...
+              </div>
+            </div>
+            
+            <script>
+              function hideLoading() {
+                const loading = document.getElementById('loading');
+                if (loading) {
+                  loading.style.display = 'none';
+                }
+              }
+              
+              function toggleFullscreen() {
+                if (!document.fullscreenElement) {
+                  document.documentElement.requestFullscreen().catch(err => {
+                    console.log('전체화면 모드 진입 실패:', err);
+                  });
+                } else {
+                  document.exitFullscreen();
+                }
+              }
+              
+              function refreshConsole() {
+                const frame = document.getElementById('vnc-frame');
+                if (frame) {
+                  frame.src = frame.src;
+                }
+              }
+              
+              // ESC 키로 전체화면 해제
+              document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && document.fullscreenElement) {
+                  document.exitFullscreen();
+                }
+              });
+              
+              // 창 크기 변경 시 iframe 크기 조정
+              window.addEventListener('resize', function() {
+                const frame = document.getElementById('vnc-frame');
+                if (frame) {
+                  frame.style.width = '100vw';
+                  frame.style.height = 'calc(100vh - 40px)';
+                }
+              });
+            </script>
+          </body>
+          </html>
+        `);
+        newWindow.document.close();
+        
+        toast.success('VNC 콘솔을 새 탭에서 열었습니다.');
+      } else {
+        toast.error('팝업이 차단되었습니다. 팝업 차단을 해제하고 다시 시도해주세요.');
+      }
+    } catch (error) {
+      console.error('전체화면 VNC 콘솔 열기 실패:', error);
       toast.error('VNC 콘솔을 열 수 없습니다.');
     }
   };
@@ -589,6 +743,14 @@ const InstanceDetailPage: React.FC = () => {
               >
                 <Monitor className="h-4 w-4 mr-2" />
                 VNC 콘솔
+              </button>
+              <button
+                onClick={handleVNCConsoleFullscreen}
+                className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+                title="새 탭에서 전체화면으로 VNC 콘솔 열기"
+              >
+                <Maximize2 className="h-4 w-4 mr-2" />
+                전체화면 VNC
               </button>
               <button
                 onClick={() => handleAction('stop')}
@@ -1208,13 +1370,23 @@ const InstanceDetailPage: React.FC = () => {
               <Monitor className="h-5 w-5 mr-2" />
               VNC 콘솔
             </h3>
-            <button
-              onClick={handleVNCConsole}
-              className="flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
-            >
-              <Monitor className="h-4 w-4 mr-2" />
-              새 콘솔 연결
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleVNCConsole}
+                className="flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+              >
+                <Monitor className="h-4 w-4 mr-2" />
+                새 콘솔 연결
+              </button>
+              <button
+                onClick={handleVNCConsoleFullscreen}
+                className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+                title="새 탭에서 전체화면으로 VNC 콘솔 열기"
+              >
+                <Maximize2 className="h-4 w-4 mr-2" />
+                전체화면 VNC
+              </button>
+            </div>
           </div>
           
           {consoleUrl ? (

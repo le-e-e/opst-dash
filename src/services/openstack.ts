@@ -364,6 +364,95 @@ export class NovaService extends BaseOpenStackService {
   async getServerMetadata(serverId: string) {
     return this.makeRequest(OPENSTACK_ENDPOINTS.NOVA, `/servers/${serverId}/metadata`, 'GET');
   }
+
+  // 유동 IP 할당 관련 메서드들 (Neutron API 사용)
+  async allocateFloatingIP(externalNetworkId: string) {
+    const floatingIPData = {
+      floatingip: {
+        floating_network_id: externalNetworkId
+      }
+    };
+    return this.makeRequest(OPENSTACK_ENDPOINTS.NEUTRON, '/v2.0/floatingips', 'POST', floatingIPData);
+  }
+
+  async associateFloatingIP(serverId: string, floatingIP: string) {
+    return this.makeRequest(OPENSTACK_ENDPOINTS.NOVA, `/servers/${serverId}/action`, 'POST', {
+      'addFloatingIp': {
+        'address': floatingIP
+      }
+    });
+  }
+
+  async disassociateFloatingIP(serverId: string, floatingIP: string) {
+    return this.makeRequest(OPENSTACK_ENDPOINTS.NOVA, `/servers/${serverId}/action`, 'POST', {
+      'removeFloatingIp': {
+        'address': floatingIP
+      }
+    });
+  }
+
+  async getFloatingIPs() {
+    const params = addProjectScopeParams('neutron');
+    return this.makeRequest(OPENSTACK_ENDPOINTS.NEUTRON, '/v2.0/floatingips', 'GET', undefined, params);
+  }
+
+  // 인스턴스에 네트워크 연결 및 유동 IP 할당
+  async setupInstanceNetworking(serverId: string, internalNetworkId: string, assignFloatingIP: boolean = true) {
+    try {
+      console.log(`인스턴스 ${serverId}의 네트워크 설정을 시작합니다...`);
+      
+      // 1. 내부 네트워크는 이미 인스턴스 생성 시 연결됨 (networks 파라미터로)
+      console.log(`내부 네트워크 ${internalNetworkId}에 연결됨`);
+      
+      // 2. 유동 IP 할당 (요청된 경우)
+      let floatingIP = null;
+      if (assignFloatingIP) {
+        try {
+          console.log('외부 네트워크를 찾아서 유동 IP를 할당합니다...');
+          
+          // 외부 네트워크 찾기
+          const networks = await neutronService.getNetworks();
+          const externalNetwork = networks.networks?.find((net: any) => 
+            net['router:external'] === true
+          );
+          
+          if (!externalNetwork) {
+            throw new Error('외부 네트워크를 찾을 수 없습니다.');
+          }
+          
+          console.log(`외부 네트워크 발견: ${externalNetwork.name} (${externalNetwork.id})`);
+          
+          // 유동 IP 할당
+          const floatingIPResponse = await this.allocateFloatingIP(externalNetwork.id);
+          floatingIP = floatingIPResponse.floatingip.floating_ip_address;
+          
+          console.log(`유동 IP 할당 완료: ${floatingIP}`);
+          
+          // 3. 유동 IP를 인스턴스에 연결
+          console.log(`유동 IP ${floatingIP}를 인스턴스에 연결합니다...`);
+          await this.associateFloatingIP(serverId, floatingIP);
+          
+          console.log(`유동 IP 연결 완료: ${floatingIP}`);
+        } catch (error) {
+          console.warn('유동 IP 할당/연결 실패:', error);
+          // 유동 IP 할당 실패해도 인스턴스 생성은 성공으로 처리
+        }
+      }
+      
+      return {
+        success: true,
+        internalNetworkId,
+        floatingIP,
+        message: floatingIP 
+          ? `네트워크 설정 완료! 내부 네트워크: ${internalNetworkId}, 외부 IP: ${floatingIP}`
+          : `네트워크 설정 완료! 내부 네트워크: ${internalNetworkId} (유동 IP 할당 실패)`
+      };
+      
+    } catch (error) {
+      console.error('인스턴스 네트워크 설정 실패:', error);
+      throw error;
+    }
+  }
 }
 
 // Neutron 서비스 (네트워크)
@@ -476,6 +565,385 @@ export class NeutronService extends BaseOpenStackService {
 
   async deleteFloatingIP(floatingIPId: string) {
     return this.makeRequest(OPENSTACK_ENDPOINTS.NEUTRON, `/v2.0/floatingips/${floatingIPId}`, 'DELETE');
+  }
+
+  // 자동 네트워크 설정 관련 메서드들
+  async createSubnet(subnetData: any) {
+    return this.makeRequest(OPENSTACK_ENDPOINTS.NEUTRON, '/v2.0/subnets', 'POST', subnetData);
+  }
+
+  async createRouter(routerData: any) {
+    return this.makeRequest(OPENSTACK_ENDPOINTS.NEUTRON, '/v2.0/routers', 'POST', routerData);
+  }
+
+  async addRouterInterface(routerId: string, interfaceData: any) {
+    return this.makeRequest(OPENSTACK_ENDPOINTS.NEUTRON, `/v2.0/routers/${routerId}/add_router_interface`, 'PUT', interfaceData);
+  }
+
+  async setRouterGateway(routerId: string, gatewayData: any) {
+    return this.makeRequest(OPENSTACK_ENDPOINTS.NEUTRON, `/v2.0/routers/${routerId}`, 'PUT', gatewayData);
+  }
+
+  async deleteSubnet(subnetId: string) {
+    return this.makeRequest(OPENSTACK_ENDPOINTS.NEUTRON, `/v2.0/subnets/${subnetId}`, 'DELETE');
+  }
+
+  async removeRouterInterface(routerId: string, interfaceData: any) {
+    return this.makeRequest(OPENSTACK_ENDPOINTS.NEUTRON, `/v2.0/routers/${routerId}/remove_router_interface`, 'PUT', interfaceData);
+  }
+
+  async deleteRouter(routerId: string) {
+    return this.makeRequest(OPENSTACK_ENDPOINTS.NEUTRON, `/v2.0/routers/${routerId}`, 'DELETE');
+  }
+
+  /**
+   * 기존 네트워크 인프라를 모두 삭제합니다.
+   * 삭제 순서: 라우터 인터페이스 → 라우터 → 서브넷 → 네트워크
+   */
+  async cleanupExistingNetworkInfrastructure() {
+    try {
+      console.log('기존 네트워크 인프라 정리를 시작합니다...');
+      
+      // 1. 라우터들 조회 및 삭제
+      const routers = await this.getRouters();
+      const defaultRouters = routers.routers?.filter((router: any) => 
+        router.name === 'default-router'
+      );
+      
+      console.log(`발견된 기본 라우터 개수: ${defaultRouters?.length || 0}`);
+      
+      for (const router of defaultRouters || []) {
+        try {
+          console.log(`라우터 ${router.name} (${router.id}) 삭제 중...`);
+          
+          // 라우터 인터페이스 제거 (여러 번 시도)
+          let attempts = 0;
+          const maxAttempts = 3;
+          
+          while (attempts < maxAttempts) {
+            try {
+              // 라우터 상세 정보 다시 가져오기
+              const routerDetail = await this.makeRequest(OPENSTACK_ENDPOINTS.NEUTRON, `/v2.0/routers/${router.id}`);
+              
+              if (routerDetail.router.ports && routerDetail.router.ports.length > 0) {
+                console.log(`라우터 포트 개수: ${routerDetail.router.ports.length}`);
+                
+                for (const port of routerDetail.router.ports) {
+                  if (port.device_owner === 'network:router_interface') {
+                    try {
+                      await this.removeRouterInterface(router.id, {
+                        subnet_id: port.fixed_ips[0]?.subnet_id
+                      });
+                      console.log(`라우터 인터페이스 제거 완료: ${port.fixed_ips[0]?.subnet_id}`);
+                    } catch (interfaceError) {
+                      console.warn(`라우터 인터페이스 제거 실패: ${interfaceError}`);
+                    }
+                  }
+                }
+              }
+              break; // 성공하면 루프 종료
+            } catch (error) {
+              attempts++;
+              console.warn(`라우터 인터페이스 제거 시도 ${attempts} 실패:`, error);
+              if (attempts < maxAttempts) {
+                await new Promise(resolve => setTimeout(resolve, 2000)); // 2초 대기
+              }
+            }
+          }
+          
+          // 라우터 삭제
+          await this.deleteRouter(router.id);
+          console.log(`라우터 삭제 완료: ${router.name}`);
+        } catch (error) {
+          console.warn(`라우터 ${router.name} 삭제 실패:`, error);
+        }
+      }
+      
+      // 잠시 대기 (라우터 삭제 완료 대기)
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      // 2. 서브넷들 조회 및 삭제
+      const subnets = await this.getSubnets();
+      const defaultSubnets = subnets.subnets?.filter((subnet: any) => 
+        subnet.name === 'internal-subnet'
+      );
+      
+      console.log(`발견된 기본 서브넷 개수: ${defaultSubnets?.length || 0}`);
+      
+      for (const subnet of defaultSubnets || []) {
+        try {
+          console.log(`서브넷 ${subnet.name} (${subnet.id}) 삭제 중...`);
+          await this.deleteSubnet(subnet.id);
+          console.log(`서브넷 삭제 완료: ${subnet.name}`);
+        } catch (error) {
+          console.warn(`서브넷 ${subnet.name} 삭제 실패:`, error);
+        }
+      }
+      
+      // 잠시 대기 (서브넷 삭제 완료 대기)
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // 3. 네트워크들 조회 및 삭제
+      const networks = await this.getNetworks();
+      const defaultNetworks = networks.networks?.filter((network: any) => 
+        network.name === 'internal-network' || network.name === 'external-network'
+      );
+      
+      console.log(`발견된 기본 네트워크 개수: ${defaultNetworks?.length || 0}`);
+      
+      for (const network of defaultNetworks || []) {
+        try {
+          console.log(`네트워크 ${network.name} (${network.id}) 삭제 중...`);
+          await this.deleteNetwork(network.id);
+          console.log(`네트워크 삭제 완료: ${network.name}`);
+        } catch (error) {
+          console.warn(`네트워크 ${network.name} 삭제 실패:`, error);
+        }
+      }
+      
+      // 4. 기본 보안그룹 삭제
+      const securityGroups = await this.getSecurityGroups();
+      const defaultSecurityGroups = securityGroups.security_groups?.filter((sg: any) => 
+        sg.name === 'default-security-group'
+      );
+      
+      console.log(`발견된 기본 보안그룹 개수: ${defaultSecurityGroups?.length || 0}`);
+      
+      for (const sg of defaultSecurityGroups || []) {
+        try {
+          console.log(`보안그룹 ${sg.name} (${sg.id}) 삭제 중...`);
+          await this.deleteSecurityGroup(sg.id);
+          console.log(`보안그룹 삭제 완료: ${sg.name}`);
+        } catch (error) {
+          console.warn(`보안그룹 ${sg.name} 삭제 실패:`, error);
+        }
+      }
+      
+      console.log('기존 네트워크 인프라 정리 완료!');
+      
+    } catch (error) {
+      console.error('네트워크 인프라 정리 실패:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 기본 네트워크 인프라를 자동으로 생성합니다.
+   * 외부 네트워크, 내부 네트워크, 서브넷, 라우터를 순차적으로 생성합니다.
+   */
+  async setupDefaultNetworkInfrastructure() {
+    try {
+      console.log('기본 네트워크 인프라 설정을 시작합니다...');
+      
+      // 기존 네트워크 인프라 확인
+      console.log('기존 네트워크 인프라를 확인합니다...');
+      
+      // 1. 외부 네트워크 확인/생성
+      let externalNetwork;
+      const networks = await this.getNetworks();
+      const existingExternal = networks.networks?.find((net: any) => 
+        net['router:external'] === true
+      );
+      
+      if (existingExternal) {
+        console.log('기존 외부 네트워크 사용:', existingExternal.name);
+        externalNetwork = { network: existingExternal };
+      } else {
+        console.log('외부 네트워크를 생성합니다...');
+        try {
+          const externalNetworkData = {
+            network: {
+              name: 'external-network',
+              admin_state_up: true,
+              'router:external': true,
+              shared: false
+            }
+          };
+          
+          externalNetwork = await this.createNetwork(externalNetworkData);
+          console.log('외부 네트워크 생성 완료:', externalNetwork.network.id);
+        } catch (error) {
+          console.error('외부 네트워크 생성 실패:', error);
+          throw new Error('외부 네트워크를 생성할 수 없습니다. 관리자에게 문의하세요.');
+        }
+      }
+
+      // 2. 내부 네트워크 확인/생성
+      let internalNetwork;
+      const existingInternal = networks.networks?.find((net: any) => 
+        net['router:external'] === false && net.name === 'internal-network'
+      );
+      
+      if (existingInternal) {
+        console.log('기존 내부 네트워크 사용:', existingInternal.name);
+        internalNetwork = { network: existingInternal };
+      } else {
+        console.log('내부 네트워크를 생성합니다...');
+        const internalNetworkData = {
+          network: {
+            name: 'internal-network',
+            admin_state_up: true,
+            'router:external': false,
+            shared: false
+          }
+        };
+        internalNetwork = await this.createNetwork(internalNetworkData);
+        console.log('내부 네트워크 생성 완료:', internalNetwork.network.id);
+      }
+
+      // 3. 내부 서브넷 확인/생성
+      let internalSubnet;
+      const subnets = await this.getSubnets();
+      const existingSubnet = subnets.subnets?.find((subnet: any) => 
+        subnet.name === 'internal-subnet'
+      );
+      
+      if (existingSubnet) {
+        console.log('기존 내부 서브넷 사용:', existingSubnet.name);
+        internalSubnet = { subnet: existingSubnet };
+      } else {
+        console.log('내부 서브넷을 생성합니다...');
+        const internalSubnetData = {
+          subnet: {
+            name: 'internal-subnet',
+            network_id: internalNetwork.network.id,
+            cidr: '192.168.1.0/24',
+            ip_version: 4,
+            enable_dhcp: true,
+            gateway_ip: '192.168.1.1',
+            dns_nameservers: ['8.8.8.8', '8.8.4.4']
+          }
+        };
+        internalSubnet = await this.createSubnet(internalSubnetData);
+        console.log('내부 서브넷 생성 완료:', internalSubnet.subnet.id);
+      }
+
+      // 4. 라우터 확인/생성 및 설정
+      let router;
+      const routers = await this.getRouters();
+      const existingRouter = routers.routers?.find((r: any) => r.name === 'default-router');
+      
+      if (existingRouter) {
+        console.log('기존 라우터 사용:', existingRouter.name);
+        router = { router: existingRouter };
+      } else {
+        console.log('라우터를 생성합니다...');
+        const routerData = {
+          router: {
+            name: 'default-router',
+            admin_state_up: true,
+            external_gateway_info: {
+              network_id: externalNetwork.network.id
+            }
+          }
+        };
+        router = await this.createRouter(routerData);
+        console.log('라우터 생성 완료:', router.router.id);
+      }
+
+      // 5. 라우터에 내부 서브넷 연결 확인/설정
+      try {
+        console.log('라우터 인터페이스 연결 상태를 확인합니다...');
+        const routerDetail = await this.makeRequest(OPENSTACK_ENDPOINTS.NEUTRON, `/v2.0/routers/${router.router.id}`);
+        
+        const hasInternalInterface = routerDetail.router.ports?.some((port: any) => 
+          port.device_owner === 'network:router_interface' && 
+          port.fixed_ips?.some((ip: any) => ip.subnet_id === internalSubnet.subnet.id)
+        );
+        
+        if (!hasInternalInterface) {
+          console.log('라우터에 내부 서브넷을 연결합니다...');
+          const interfaceData = {
+            subnet_id: internalSubnet.subnet.id
+          };
+          await this.addRouterInterface(router.router.id, interfaceData);
+          console.log('라우터 인터페이스 연결 완료');
+        } else {
+          console.log('라우터 인터페이스가 이미 연결되어 있습니다.');
+        }
+      } catch (error) {
+        console.warn('라우터 인터페이스 연결 확인/설정 실패:', error);
+      }
+
+      // 6. 기본 보안그룹 확인/생성
+      const securityGroups = await this.getSecurityGroups();
+      const existingSG = securityGroups.security_groups?.find((sg: any) => 
+        sg.name === 'default-security-group'
+      );
+      
+      if (existingSG) {
+        console.log('기존 기본 보안그룹 사용:', existingSG.name);
+      } else {
+        console.log('기본 보안그룹을 생성합니다...');
+        const securityGroupData = {
+          security_group: {
+            name: 'default-security-group',
+            description: '기본 보안그룹 - SSH, HTTP, HTTPS 허용'
+          }
+        };
+        const newSG = await this.createSecurityGroup(securityGroupData);
+        
+        // 기본 규칙 추가
+        const rules = [
+          { direction: 'ingress', ethertype: 'IPv4', protocol: 'tcp', port_range_min: 22, port_range_max: 22, remote_ip_prefix: '0.0.0.0/0' },
+          { direction: 'ingress', ethertype: 'IPv4', protocol: 'tcp', port_range_min: 80, port_range_max: 80, remote_ip_prefix: '0.0.0.0/0' },
+          { direction: 'ingress', ethertype: 'IPv4', protocol: 'tcp', port_range_min: 443, port_range_max: 443, remote_ip_prefix: '0.0.0.0/0' }
+        ];
+        
+        for (const rule of rules) {
+          try {
+            await this.createSecurityGroupRule({
+              security_group_rule: {
+                ...rule,
+                security_group_id: newSG.security_group.id
+              }
+            });
+          } catch (ruleError) {
+            console.warn('보안그룹 규칙 생성 실패:', ruleError);
+          }
+        }
+        console.log('기본 보안그룹 생성 완료');
+      }
+
+      console.log('기본 네트워크 인프라 설정이 완료되었습니다!');
+      
+      return {
+        success: true,
+        networks: {
+          internal: internalNetwork.network,
+          external: externalNetwork
+        },
+        subnet: internalSubnet.subnet,
+        router: router.router
+      };
+      
+    } catch (error) {
+      console.error('기본 네트워크 인프라 설정 실패:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 사용 가능한 내부 네트워크가 있는지 확인하고, 없으면 자동으로 생성합니다.
+   */
+  async ensureNetworkAvailable() {
+    try {
+      const networks = await this.getNetworks();
+      const availableNetworks = networks.networks?.filter((net: any) => 
+        net['router:external'] === false && net.status === 'ACTIVE'
+      );
+      
+      if (!availableNetworks || availableNetworks.length === 0) {
+        console.log('사용 가능한 내부 네트워크가 없습니다. 자동으로 생성합니다...');
+        const result = await this.setupDefaultNetworkInfrastructure();
+        return result.networks.internal;
+      }
+      
+      return availableNetworks[0];
+    } catch (error) {
+      console.error('네트워크 확인 및 생성 실패:', error);
+      throw error;
+    }
   }
 
   async getQuotas() {

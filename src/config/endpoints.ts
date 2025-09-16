@@ -12,7 +12,7 @@ export const AUTH_CONFIG = {
   USER_DOMAIN_NAME: 'Default',
   PROJECT_NAME: 'admin',
   USERNAME: 'admin',
-  PASSWORD: 'z4gERtPDjxYg2se2OONUkyqsbuCKOyiiwg8vkpLt',
+  PASSWORD: 'qR9oiHHohOK1UMq6EmKCDXJwttooNp0uB4T4yeMe',
   AUTH_URL: '/keystone',
   IDENTITY_API_VERSION: '3',
   IMAGE_API_VERSION: '2',

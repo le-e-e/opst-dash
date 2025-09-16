@@ -1,0 +1,13 @@
+{
+  "name": "simple-queue-server",
+  "version": "1.0.0",
+  "description": "Simple user registration queue",
+  "main": "queue-server.js",
+  "scripts": {
+    "start": "node queue-server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
+  }
+}

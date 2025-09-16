@@ -61,7 +61,7 @@ interface KeystoneAuthState {
   registerUser: (userData: { name: string; password: string; username: string }) => Promise<{ success: boolean; message: string }>;
   approveUser: (userId: string) => Promise<void>;
   rejectUser: (userId: string) => Promise<void>;
-  loadPendingUsers: () => Promise<KeystoneUser[]>;
+  loadPendingUsers: () => KeystoneUser[];
 
   // 유틸리티
   getCurrentProjectId: () => string | null;
@@ -399,51 +399,79 @@ export const useKeystoneAuthStore = create<KeystoneAuthState>()(
         try {
           console.log('🔍 서버 기반 회원가입 시작:', userData);
           
+          // 입력 데이터 유효성 검사
+          if (!userData.name?.trim()) {
+            throw new Error('이름을 입력해주세요.');
+          }
+          if (!userData.username?.trim()) {
+            throw new Error('아이디를 입력해주세요.');
+          }
+          if (!userData.password?.trim()) {
+            throw new Error('비밀번호를 입력해주세요.');
+          }
+          if (userData.password.length < 6) {
+            throw new Error('비밀번호는 최소 6자 이상이어야 합니다.');
+          }
+          
           // Keystone 서버에 비활성화 상태로 사용자 생성
           const result = await keystoneService.registerUser({
-            name: userData.name,
+            name: userData.name.trim(),
             password: userData.password,
-            username: userData.username
+            username: userData.username.trim()
           });
           
           console.log('✅ 서버에 회원가입 완료:', result);
           
           set({ loading: false, error: null });
-          return { success: true, message: '회원가입이 완료되었습니다. 관리자 승인을 기다려주세요.' };
-        } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : '회원가입에 실패했습니다.';
+          return { 
+            success: true, 
+            message: `회원가입이 완료되었습니다. 사용자명 "${userData.username}"로 관리자 승인을 기다려주세요.`,
+            user: result.user
+          };
+        } catch (error: any) {
+          console.error('❌ 회원가입 실패:', error);
+          
+          let errorMessage = '회원가입에 실패했습니다.';
+          
+          // 더 구체적인 오류 메시지 처리
+          if (error?.message) {
+            if (error.message.includes('Conflict') || error.message.includes('409')) {
+              errorMessage = `사용자명 "${userData.username}"이 이미 존재합니다. 다른 아이디를 시도해주세요.`;
+            } else if (error.message.includes('Bad Request') || error.message.includes('400')) {
+              errorMessage = '입력 정보가 올바르지 않습니다. 아이디는 영문, 숫자, 언더스코어만 사용 가능합니다.';
+            } else if (error.message.includes('Unauthorized') || error.message.includes('401')) {
+              errorMessage = '관리자 인증에 실패했습니다. 시스템 관리자에게 문의하세요.';
+            } else if (error.message.includes('Network Error') || error.message.includes('Failed to fetch')) {
+              errorMessage = 'OpenStack 서버에 연결할 수 없습니다. 네트워크 연결을 확인해주세요.';
+            } else {
+              errorMessage = error.message;
+            }
+          }
+          
           set({ loading: false, error: errorMessage });
-          throw error;
+          throw new Error(errorMessage);
         }
       },
 
-      // 사용자 승인 (서버에서 활성화)
-      approveUser: async (userId: string) => {
+      // 사용자 승인 (로컬 대기 → OpenStack 생성)
+      approveUser: async (pendingUserId: string) => {
         set({ loading: true });
         
         try {
-          console.log('🔍 사용자 승인 시작:', userId);
+          console.log('🔍 사용자 승인 시작:', pendingUserId);
           
-          // 사용자 활성화
-          await keystoneService.updateUserStatus(userId, true);
-          console.log('✅ 사용자 활성화 완료');
+          // 로컬 대기 사용자를 OpenStack에 실제 생성
+          const keystoneUser = await keystoneService.approveUserRegistration(pendingUserId);
+          console.log('✅ OpenStack 사용자 생성 완료:', keystoneUser.user.name);
           
-          // 사용자 정보 가져오기
-          const usersResponse = await keystoneService.getUsers();
-          const userToApprove = usersResponse.users.find((u: any) => u.id === userId);
-          
-          if (!userToApprove) {
-            throw new Error('사용자를 찾을 수 없습니다.');
-          }
-
           // 개인 프로젝트 생성 및 역할 할당
           try {
             console.log('개인 프로젝트 생성 및 역할 할당 시작...');
             
             // 사용자명으로 개인 프로젝트 생성
             const personalProject = await keystoneService.createProject({
-              name: userToApprove.name,
-              description: `${userToApprove.description || userToApprove.name}님의 개인 프로젝트`
+              name: keystoneUser.user.name,
+              description: `${keystoneUser.user.description || keystoneUser.user.name}님의 개인 프로젝트`
             });
             console.log('개인 프로젝트 생성 완료:', personalProject.project.name);
 
@@ -456,15 +484,15 @@ export const useKeystoneAuthStore = create<KeystoneAuthState>()(
             }
 
             // 사용자를 개인 프로젝트에 member 역할로 할당
-            console.log(`역할 할당 시도: 사용자 ${userId} → 프로젝트 ${personalProject.project.id} → 역할 ${memberRole.id}`);
+            console.log(`역할 할당 시도: 사용자 ${keystoneUser.user.id} → 프로젝트 ${personalProject.project.id} → 역할 ${memberRole.id}`);
             
             await keystoneService.assignRoleToUserOnProject(
-              userId, 
+              keystoneUser.user.id, 
               personalProject.project.id, 
               memberRole.id
             );
 
-            console.log(`✅ 성공! 사용자 ${userToApprove.name}에게 개인 프로젝트 ${userToApprove.name} 생성 및 할당 완료`);
+            console.log(`✅ 성공! 사용자 ${keystoneUser.user.name}에게 개인 프로젝트 ${keystoneUser.user.name} 생성 및 할당 완료`);
           } catch (roleError) {
             console.error('❌ 개인 프로젝트 생성/할당 실패:', roleError);
             throw new Error('사용자 개인 프로젝트 생성에 실패했습니다.');
@@ -472,6 +500,7 @@ export const useKeystoneAuthStore = create<KeystoneAuthState>()(
           
           await get().loadUsers();
           set({ loading: false, error: null });
+          return keystoneUser;
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : '사용자 승인에 실패했습니다.';
           set({ loading: false, error: errorMessage });
@@ -479,17 +508,16 @@ export const useKeystoneAuthStore = create<KeystoneAuthState>()(
         }
       },
 
-      rejectUser: async (userId: string) => {
+      rejectUser: async (pendingUserId: string) => {
         set({ loading: true });
         
         try {
-          console.log('🔍 사용자 거부 시작:', userId);
+          console.log('🔍 사용자 거부 시작:', pendingUserId);
           
-          // 서버에서 사용자 삭제
-          await keystoneService.deleteUser(userId);
-          console.log('✅ 사용자 삭제 완료');
+          // 로컬 스토리지에서 제거
+          await keystoneService.rejectUserRegistration(pendingUserId);
+          console.log('✅ 사용자 거부 완료');
           
-          await get().loadUsers();
           set({ loading: false, error: null });
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : '사용자 거부에 실패했습니다.';
@@ -498,12 +526,12 @@ export const useKeystoneAuthStore = create<KeystoneAuthState>()(
         }
       },
 
-      // 대기 중인 사용자 목록 조회 (서버에서)
-      loadPendingUsers: async () => {
+      // 대기 중인 사용자 목록 조회 (로컬 스토리지 + 파일 기반)
+      loadPendingUsers: () => {
         try {
-          console.log('🔍 서버에서 대기 중인 사용자 로드 시작');
-          const pendingUsers = await keystoneService.getPendingUsers();
-          console.log('🔍 서버에서 로드된 대기 중인 사용자:', pendingUsers);
+          console.log('🔍 로컬 스토리지에서 대기 중인 사용자 로드 시작');
+          const pendingUsers = keystoneService.getLocalPendingUsers();
+          console.log('🔍 로컬에서 로드된 대기 중인 사용자:', pendingUsers);
           return pendingUsers;
         } catch (error) {
           console.error('대기 중인 사용자 목록 로드 실패:', error);

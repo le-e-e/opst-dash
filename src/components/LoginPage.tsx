@@ -54,12 +54,52 @@ const LoginPage: React.FC = () => {
   const onRegisterSubmit = async (data: RegisterData) => {
     try {
       clearError();
+      console.log('🔄 회원가입 시도:', data);
+      
+      // 로컬 스토리지 상태 디버깅
+      console.log('🔍 회원가입 전 로컬 스토리지 상태:');
+      const stored = localStorage.getItem('pending-users');
+      console.log('  - Raw data:', stored);
+      console.log('  - Is null/undefined:', stored === null || stored === undefined);
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          console.log('  - Parsed data:', parsed);
+          console.log('  - Is Array:', Array.isArray(parsed));
+        } catch (parseError) {
+          console.log('  - Parse Error:', parseError);
+        }
+      }
+      
       const result = await registerUser(data);
-      toast.success(result.message);
+      console.log('✅ 회원가입 결과:', result);
+      
+      // 성공 시에만 여기 도달
+      toast.success(result.message || '회원가입이 완료되었습니다. 관리자 승인을 기다려주세요.');
       resetSignupForm();
       setActiveTab('login');
-    } catch (error) {
-      toast.error('회원가입에 실패했습니다. 다시 시도해주세요.');
+    } catch (error: any) {
+      console.error('❌ 회원가입 오류:', error);
+      
+      // 에러 메시지를 더 자세히 처리
+      let errorMessage = '회원가입에 실패했습니다.';
+      
+      if (error?.message) {
+        errorMessage = error.message;
+      } else if (typeof error === 'string') {
+        errorMessage = error;
+      }
+      
+      // 특정 오류에 대한 사용자 친화적 메시지
+      if (errorMessage.includes('already exists') || errorMessage.includes('이미 존재')) {
+        errorMessage = '이미 존재하는 사용자명입니다. 다른 아이디를 시도해주세요.';
+      } else if (errorMessage.includes('validation') || errorMessage.includes('형식')) {
+        errorMessage = '입력 정보의 형식이 올바르지 않습니다. 확인 후 다시 시도해주세요.';
+      } else if (errorMessage.includes('network') || errorMessage.includes('연결')) {
+        errorMessage = '서버 연결에 문제가 있습니다. 잠시 후 다시 시도해주세요.';
+      }
+      
+      toast.error(errorMessage);
     }
   };
 

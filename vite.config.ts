@@ -54,6 +54,20 @@ export default defineConfig({
           });
         }
       },
+      // Cinder API 프록시 (볼륨 서비스)
+      '/cinder': {
+        target: 'http://192.168.0.25:8776',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/cinder/, ''),
+        configure: (proxy, options) => {
+          proxy.on('error', (err, req, res) => {
+            console.log('Cinder proxy error', err);
+          });
+          proxy.on('proxyReq', (proxyReq, req, res) => {
+            console.log('Cinder proxy request:', req.method, req.url);
+          });
+        }
+      },
       // Placement API 프록시
       '/placement': {
         target: 'http://192.168.0.25:8780',
@@ -84,6 +98,17 @@ export default defineConfig({
         configure: (proxy, options) => {
           proxy.on('error', (err, req, res) => {
             console.log('Heat-cfn proxy error', err);
+          });
+        }
+      },
+      // 대기열 API 프록시 (간단한 파일 서버)
+      '/api/queue': {
+        target: 'http://localhost:3002',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/queue/, '/api'),
+        configure: (proxy, options) => {
+          proxy.on('error', (err, req, res) => {
+            console.log('Queue API proxy error', err);
           });
         }
       }

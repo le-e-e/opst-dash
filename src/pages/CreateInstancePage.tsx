@@ -360,30 +360,21 @@ const CreateInstancePage: React.FC = () => {
           ...(net.fixed_ip && { fixed_ip: net.fixed_ip })
         }));
       } else {
-        // 네트워크가 설정되지 않은 경우 private 네트워크 찾기
-        const allNetworks = await neutronService.getNetworks();
-        
-        // private 네트워크 우선 찾기 (외부 네트워크가 아닌 것)
-        const privateNet = allNetworks.networks?.find((net: any) => 
-          !net['router:external'] && 
-          net.status === 'ACTIVE' &&
-          (net.name.includes('private') || net.name.includes('internal') || net.name.includes('172.30'))
-        );
-        
-        if (privateNet) {
-          networks = [{ uuid: privateNet.id }];
-          console.log('자동으로 private 네트워크 설정:', privateNet.name, privateNet.id);
-        } else if (allNetworks.networks?.length > 0) {
-          // private 네트워크가 없으면 첫 번째 ACTIVE 네트워크 사용
-          const firstActiveNet = allNetworks.networks.find((net: any) => net.status === 'ACTIVE');
-          if (firstActiveNet) {
-            networks = [{ uuid: firstActiveNet.id }];
-            console.log('자동으로 첫 번째 ACTIVE 네트워크 설정:', firstActiveNet.name, firstActiveNet.id);
+        // 네트워크가 설정되지 않은 경우 자동으로 네트워크 확인 및 생성
+        try {
+          console.log('사용 가능한 네트워크를 확인하고 자동으로 설정합니다...');
+          const availableNetwork = await neutronService.ensureNetworkAvailable();
+          
+          if (availableNetwork) {
+            networks = [{ uuid: availableNetwork.id }];
+            console.log('자동으로 네트워크 설정 완료:', availableNetwork.name, availableNetwork.id);
           } else {
-            throw new Error('사용 가능한 ACTIVE 상태의 네트워크가 없습니다.');
+            throw new Error('네트워크 자동 설정에 실패했습니다.');
           }
-        } else {
-          throw new Error('사용 가능한 네트워크가 없습니다.');
+        } catch (error) {
+          console.error('네트워크 자동 설정 실패:', error);
+          toast.error('네트워크 설정에 실패했습니다. 관리자에게 문의하세요.');
+          throw error;
         }
       }
       
@@ -676,171 +667,47 @@ const CreateInstancePage: React.FC = () => {
       // 인스턴스 생성 성공 알림
       workflowNotifications.instanceCreated(data.name);
       
-      // 유동 IP 자동 할당
-      if (data.auto_assign_floating_ip && response.server?.id) {
-        // 백그라운드에서 유동 IP 할당 처리
-        (async () => {
+      // 네트워크 설정 및 유동 IP 할당
+      if (response.server?.id) {
+        // 백그라운드에서 네트워크 설정 처리
+        setTimeout(async () => {
           try {
-            // 먼저 현재 네트워크와 유동 IP 상황 파악
-            console.log('=== 유동 IP 할당 시작 ===');
+            console.log('=== 인스턴스 네트워크 설정 시작 ===');
             
-            // 네트워크 정보 먼저 가져오기
-            const networks = await neutronService.getNetworks();
-            const floatingIPs = await neutronService.getFloatingIps();
+            // 사용된 네트워크 ID 가져오기
+            const usedNetworkId = networks[0]?.uuid;
+            if (!usedNetworkId) {
+              console.warn('사용된 네트워크 ID를 찾을 수 없습니다.');
+              return;
+            }
             
-            console.log('전체 네트워크 목록:');
-            networks.networks?.forEach((net: any) => {
-              console.log(`- ${net.name}: external=${net['router:external']}, provider=${net.provider_network_type}, id=${net.id}`);
-            });
+            console.log(`인스턴스 ${response.server.id}의 네트워크 설정 시작`);
+            console.log(`사용된 네트워크 ID: ${usedNetworkId}`);
             
-            console.log('현재 유동 IP 목록:');
-            floatingIPs.floatingips?.forEach((fip: any) => {
-              console.log(`- ${fip.floating_ip_address}: 사용중=${!!fip.port_id}, 네트워크ID=${fip.floating_network_id}`);
-            });
+            // 네트워크 설정 및 유동 IP 할당
+            const networkResult = await novaService.setupInstanceNetworking(
+              response.server.id, 
+              usedNetworkId, 
+              data.auto_assign_floating_ip
+            );
             
-            // 외부 네트워크 찾기 (여러 방법 시도)
-            let externalNetwork = null;
+            console.log('네트워크 설정 결과:', networkResult);
             
-            // 방법 1: router:external = true (가장 정확한 방법)
-            externalNetwork = networks.networks?.find((net: any) => net['router:external'] === true);
-            if (externalNetwork) {
-              console.log('방법 1 성공: router:external=true 네트워크 발견:', externalNetwork.name);
-            } else {
-              console.log('방법 1 실패: router:external=true 네트워크 없음');
+            // 성공 알림
+            if (networkResult.success) {
+              toast.success(networkResult.message, { duration: 5000 });
               
-              // 방법 2: 이름 패턴으로 외부 네트워크 찾기
-              externalNetwork = networks.networks?.find((net: any) => 
-                net.name.toLowerCase().includes('external') || 
-                net.name.toLowerCase().includes('public') ||
-                net.name.toLowerCase().includes('floating') ||
-                net.name.toLowerCase().includes('wan')
-              );
-              if (externalNetwork) {
-                console.log('방법 2 성공: 이름 패턴으로 외부 네트워크 발견:', externalNetwork.name);
-              } else {
-                console.log('방법 2 실패: 이름 패턴 매칭 실패');
-                
-                // 방법 3: 기존 유동 IP로부터 네트워크 추정
-                const existingFloatingIP = floatingIPs.floatingips?.find((fip: any) => 
-                  fip.floating_ip_address && !fip.port_id
-                );
-                if (existingFloatingIP) {
-                  externalNetwork = networks.networks?.find((net: any) => 
-                    net.id === existingFloatingIP.floating_network_id
-                  );
-                  if (externalNetwork) {
-                    console.log('방법 3 성공: 기존 유동 IP로부터 네트워크 추정:', externalNetwork.name);
-                  }
-                }
+              // 유동 IP가 할당된 경우 추가 정보 표시
+              if (networkResult.floatingIP) {
+                toast.success(`외부 접속 IP: ${networkResult.floatingIP}`, { duration: 8000 });
               }
             }
             
-            if (!externalNetwork) {
-              // 방법 4: provider_network_type이 flat 또는 vlan인 네트워크 찾기
-              externalNetwork = networks.networks?.find((net: any) => 
-                net.provider_network_type === 'flat' || net.provider_network_type === 'vlan'
-              );
-              if (externalNetwork) {
-                console.log('방법 4 성공: provider_network_type으로 외부 네트워크 발견:', externalNetwork.name);
-              } else {
-                console.log('방법 4 실패: provider_network_type 매칭 실패');
-                
-                // 방법 5: 첫 번째 사용 가능한 네트워크 (마지막 수단)
-                externalNetwork = networks.networks?.[0];
-                console.log('방법 5: 첫 번째 네트워크 사용 (마지막 수단):', externalNetwork?.name);
-              }
-            }
-            
-            console.log('최종 선택된 외부 네트워크:', externalNetwork);
-            
-            if (!externalNetwork) {
-              throw new Error('외부 네트워크를 찾을 수 없습니다.');
-            }
-
-            // 인스턴스가 ACTIVE 상태가 될 때까지 대기
-            let attempts = 0;
-            const maxAttempts = 60; // 최대 10분 대기
-            
-            while (attempts < maxAttempts) {
-              await new Promise(resolve => setTimeout(resolve, 10000)); // 10초 대기
-              
-              try {
-                const serverStatus = await novaService.getServer(response.server.id);
-                console.log(`인스턴스 상태: ${serverStatus.server.status} (시도: ${attempts + 1}/${maxAttempts})`);
-                
-                if (serverStatus.server.status === 'ACTIVE') {
-                  console.log('인스턴스가 ACTIVE 상태가 되었습니다. 유동 IP 할당을 시작합니다...');
-                  
-                  // 사용 가능한 유동 IP 다시 확인
-                  const currentFloatingIPs = await neutronService.getFloatingIps();
-                  const availableIP = currentFloatingIPs.floatingips?.find((fip: any) => !fip.port_id);
-                  
-                  let floatingIPAddress = '';
-                  
-                  if (availableIP) {
-                    console.log('기존 유동 IP 사용:', availableIP.floating_ip_address);
-                    floatingIPAddress = availableIP.floating_ip_address;
-                  } else {
-                    console.log('새로운 유동 IP 생성 중...');
-                    try {
-                      const floatingIPRequest = {
-                        floatingip: {
-                          floating_network_id: externalNetwork.id
-                        }
-                      };
-                      console.log('유동 IP 생성 요청:', floatingIPRequest);
-                      
-                      const newFloatingIP = await neutronService.createFloatingIP(floatingIPRequest);
-                      console.log('새로 생성된 유동 IP 응답:', newFloatingIP);
-                      
-                      if (newFloatingIP.floatingip) {
-                        floatingIPAddress = newFloatingIP.floatingip.floating_ip_address;
-                        console.log('새로운 유동 IP 주소:', floatingIPAddress);
-                      }
-                    } catch (createError) {
-                      console.error('유동 IP 생성 실패:', createError);
-                      throw createError;
-                    }
-                  }
-                  
-                  if (floatingIPAddress) {
-                    console.log('유동 IP 연결 시도:', floatingIPAddress);
-                    try {
-                      await novaService.attachFloatingIP(response.server.id, floatingIPAddress);
-                      toast.success(`유동 IP ${floatingIPAddress}가 자동으로 할당되었습니다.`);
-                      console.log('유동 IP 할당 성공!');
-                                         } catch (attachError: any) {
-                       console.error('유동 IP 연결 실패:', attachError);
-                       toast.error(`유동 IP 연결에 실패했습니다: ${attachError.message || '연결 오류'}`);
-                     }
-                  } else {
-                    console.error('유동 IP 주소를 얻을 수 없습니다.');
-                    toast.error('유동 IP 할당에 실패했습니다: IP 주소를 얻을 수 없습니다.');
-                  }
-                  break;
-                } else if (serverStatus.server.status === 'ERROR') {
-                  console.error('인스턴스가 오류 상태입니다.');
-                  toast.error('인스턴스가 오류 상태로 인해 유동 IP를 할당할 수 없습니다.');
-                  break;
-                }
-              } catch (checkError) {
-                console.error('인스턴스 상태 확인 실패:', checkError);
-              }
-              
-              attempts++;
-            }
-            
-            if (attempts >= maxAttempts) {
-              console.error('유동 IP 할당 시간 초과');
-              toast.error('유동 IP 할당 시간이 초과되었습니다. 인스턴스 생성 후 수동으로 할당해주세요.');
-            }
-          } catch (ipError: any) {
-            console.error('유동 IP 할당 프로세스 실패:', ipError);
-            toast.error(`유동 IP 할당에 실패했습니다: ${ipError.message || '알 수 없는 오류'}`);
-          } finally {
-            console.log('=== 유동 IP 할당 종료 ===');
+          } catch (error) {
+            console.error('인스턴스 네트워크 설정 실패:', error);
+            toast.error('네트워크 설정에 실패했습니다. 수동으로 설정해주세요.');
           }
-        })();
+        }, 10000); // 10초 후 시작 (인스턴스가 완전히 생성될 때까지 대기)
       }
       
       navigate('/compute');
@@ -1704,6 +1571,53 @@ const CreateInstancePage: React.FC = () => {
         {/* 스텝 4: 고급 설정 */}
         {currentStep === 4 && (
           <div className="space-y-6">
+            {/* 네트워크 설정 */}
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-6 flex items-center">
+                <Globe className="h-5 w-5 mr-2" />
+                네트워크 설정
+              </h3>
+              
+              <div className="space-y-4">
+                <div className="flex items-center">
+                  <Controller
+                    name="auto_assign_floating_ip"
+                    control={control}
+                    defaultValue={true}
+                    render={({ field }) => (
+                      <label className="flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          {...field}
+                          checked={field.value}
+                          className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                        />
+                        <span className="ml-3 text-sm text-gray-700 dark:text-gray-300">
+                          유동 IP 자동 할당 (외부 인터넷 접근 가능)
+                        </span>
+                      </label>
+                    )}
+                  />
+                </div>
+                
+                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                  <div className="flex items-start">
+                    <Info className="h-5 w-5 text-blue-600 dark:text-blue-400 mt-0.5 mr-3 flex-shrink-0" />
+                    <div className="text-sm text-blue-800 dark:text-blue-200">
+                      <p className="font-medium mb-1">네트워크 자동 설정</p>
+                      <ul className="list-disc list-inside space-y-1">
+                        <li><strong>내부 네트워크</strong>: 인스턴스끼리 통신 가능한 내부망에 자동 연결</li>
+                        <li><strong>외부 네트워크</strong>: 유동 IP 할당 시 외부 인터넷 접근 가능</li>
+                        <li><strong>라우터</strong>: 내부 ↔ 외부 네트워크 간 NAT 역할</li>
+                        <li><strong>보안그룹</strong>: SSH(22), HTTP(80), HTTPS(443) 포트 자동 허용</li>
+                        <li><strong>자동 생성</strong>: 네트워크가 없으면 자동으로 생성</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* 사용자 데이터 */}
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
               <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-6">사용자 데이터</h3>
