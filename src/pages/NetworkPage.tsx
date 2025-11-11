@@ -451,17 +451,17 @@ const NetworkPage: React.FC = () => {
 
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
-      case 'active': return 'bg-green-100 text-green-800';
-      case 'down': return 'bg-red-100 text-red-800';
-      case 'error': return 'bg-red-100 text-red-800';
-      default: return 'bg-gray-100 text-gray-800';
+      case 'active': return 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200';
+      case 'down': return 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200';
+      case 'error': return 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200';
+      default: return 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200';
     }
   };
 
   const getRuleTypeColor = (direction: string) => {
     return direction === 'ingress' 
-      ? 'bg-blue-100 text-blue-800' 
-      : 'bg-green-100 text-green-800';
+      ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200' 
+      : 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200';
   };
 
   const getProtocolText = (protocol: string | null) => {
@@ -532,14 +532,14 @@ const NetworkPage: React.FC = () => {
       </div>
 
       {/* 탭 네비게이션 */}
-      <div className="border-b border-gray-200">
+      <div className="border-b border-gray-200 dark:border-gray-700">
         <nav className="-mb-px flex space-x-8">
           <button
             onClick={() => setActiveTab('networks')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
               activeTab === 'networks'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-blue-500 dark:border-blue-400 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
             }`}
           >
             <Network className="h-4 w-4 inline mr-2" />
@@ -549,8 +549,8 @@ const NetworkPage: React.FC = () => {
             onClick={() => setActiveTab('subnets')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
               activeTab === 'subnets'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-blue-500 dark:border-blue-400 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
             }`}
           >
             <Globe className="h-4 w-4 inline mr-2" />
@@ -560,8 +560,8 @@ const NetworkPage: React.FC = () => {
             onClick={() => setActiveTab('routers')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
               activeTab === 'routers'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-blue-500 dark:border-blue-400 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
             }`}
           >
             <Router className="h-4 w-4 inline mr-2" />
@@ -571,8 +571,8 @@ const NetworkPage: React.FC = () => {
             onClick={() => setActiveTab('security-groups')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
               activeTab === 'security-groups'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-blue-500 dark:border-blue-400 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
             }`}
           >
             <Shield className="h-4 w-4 inline mr-2" />
@@ -582,8 +582,8 @@ const NetworkPage: React.FC = () => {
             onClick={() => setActiveTab('keypairs')}
             className={`py-2 px-1 border-b-2 font-medium text-sm ${
               activeTab === 'keypairs'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-blue-500 dark:border-blue-400 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
             }`}
           >
             <Key className="h-4 w-4 inline mr-2" />
@@ -750,25 +750,25 @@ const NetworkPage: React.FC = () => {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">작업</th>
                   </tr>
                 </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
+                <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                   {securityGroups.map((sg) => (
-                    <tr key={sg.id} className={`hover:bg-gray-50 ${selectedSecurityGroup?.id === sg.id ? 'bg-blue-50' : ''}`}>
+                    <tr key={sg.id} className={`hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${selectedSecurityGroup?.id === sg.id ? 'bg-blue-50 dark:bg-blue-900/30' : ''}`}>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
-                          <Shield className="h-5 w-5 text-gray-400 mr-3" />
+                          <Shield className="h-5 w-5 text-gray-400 dark:text-gray-500 mr-3" />
                           <div>
-                            <div className="text-sm font-medium text-gray-900">{sg.name}</div>
-                            <div className="text-sm text-gray-500 truncate max-w-xs">{sg.id}</div>
+                            <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{sg.name}</div>
+                            <div className="text-sm text-gray-500 dark:text-gray-400 truncate max-w-xs">{sg.id}</div>
                           </div>
                         </div>
                       </td>
-                      <td className="px-6 py-4 text-sm text-gray-900">
+                      <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
                         <div className="max-w-xs truncate" title={sg.description}>
                           {sg.description || '-'}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-900/50 text-blue-800 dark:text-blue-200">
                           {sg.rules?.length || 0}개
                         </span>
                       </td>
@@ -776,7 +776,7 @@ const NetworkPage: React.FC = () => {
                         <div className="flex items-center space-x-2">
                           <button
                             onClick={() => setSelectedSecurityGroup(sg)}
-                            className="inline-flex items-center px-2 py-1 text-xs font-medium text-blue-600 bg-blue-100 rounded hover:bg-blue-200"
+                            className="inline-flex items-center px-2 py-1 text-xs font-medium text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/50 rounded hover:bg-blue-200 dark:hover:bg-blue-800 transition-colors"
                             title="규칙 관리"
                           >
                             <Eye className="h-3 w-3 mr-1" />
@@ -785,7 +785,7 @@ const NetworkPage: React.FC = () => {
                           {sg.name !== 'default' && (
                             <button
                               onClick={() => handleDeleteSecurityGroup(sg.id, sg.name)}
-                              className="inline-flex items-center px-2 py-1 text-xs font-medium text-red-600 bg-red-100 rounded hover:bg-red-200"
+                              className="inline-flex items-center px-2 py-1 text-xs font-medium text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/50 rounded hover:bg-red-200 dark:hover:bg-red-800 transition-colors"
                               title="삭제"
                             >
                               <Trash2 className="h-3 w-3 mr-1" />
@@ -799,8 +799,8 @@ const NetworkPage: React.FC = () => {
                 </tbody>
               </table>
               {securityGroups.length === 0 && (
-                <div className="text-center py-8 text-gray-500">
-                  <Shield className="h-8 w-8 mx-auto mb-2 text-gray-300" />
+                <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+                  <Shield className="h-8 w-8 mx-auto mb-2 text-gray-300 dark:text-gray-600" />
                   <p>보안그룹이 없습니다.</p>
                 </div>
               )}
@@ -813,17 +813,17 @@ const NetworkPage: React.FC = () => {
 
       {/* 보안그룹 규칙 상세 모달 */}
       {selectedSecurityGroup && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center z-50">
-          <div className="relative p-6 border w-full max-w-6xl mx-4 bg-white rounded-lg shadow-xl max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-gray-600 dark:bg-gray-900 bg-opacity-50 dark:bg-opacity-70 overflow-y-auto h-full w-full flex items-center justify-center z-50">
+          <div className="relative p-6 border border-gray-200 dark:border-gray-700 w-full max-w-6xl mx-4 bg-white dark:bg-gray-800 rounded-lg shadow-xl max-h-[90vh] overflow-y-auto">
             {/* 모달 헤더 */}
-            <div className="flex justify-between items-center mb-6 pb-4 border-b border-gray-200">
+            <div className="flex justify-between items-center mb-6 pb-4 border-b border-gray-200 dark:border-gray-700">
               <div className="flex items-center">
-                <Shield className="h-6 w-6 text-blue-600 mr-3" />
+                <Shield className="h-6 w-6 text-blue-600 dark:text-blue-400 mr-3" />
                 <div>
-                  <h3 className="text-xl font-semibold text-gray-900">
+                  <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
                     {selectedSecurityGroup.name} 보안규칙 관리
                   </h3>
-                  <p className="text-sm text-gray-500 mt-1">
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                     {selectedSecurityGroup.description || '설명 없음'}
                   </p>
                 </div>
@@ -850,70 +850,70 @@ const NetworkPage: React.FC = () => {
 
             {/* 규칙 통계 */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-              <div className="bg-blue-50 p-4 rounded-lg">
-                <div className="text-2xl font-bold text-blue-700">
+              <div className="bg-blue-50 dark:bg-blue-900/30 p-4 rounded-lg">
+                <div className="text-2xl font-bold text-blue-700 dark:text-blue-300">
                   {(selectedSecurityGroup.rules || []).filter(r => r.direction === 'ingress').length}
                 </div>
-                <div className="text-sm text-blue-600">인바운드 규칙</div>
+                <div className="text-sm text-blue-600 dark:text-blue-400">인바운드 규칙</div>
               </div>
-              <div className="bg-green-50 p-4 rounded-lg">
-                <div className="text-2xl font-bold text-green-700">
+              <div className="bg-green-50 dark:bg-green-900/30 p-4 rounded-lg">
+                <div className="text-2xl font-bold text-green-700 dark:text-green-300">
                   {(selectedSecurityGroup.rules || []).filter(r => r.direction === 'egress').length}
                 </div>
-                <div className="text-sm text-green-600">아웃바운드 규칙</div>
+                <div className="text-sm text-green-600 dark:text-green-400">아웃바운드 규칙</div>
               </div>
-              <div className="bg-purple-50 p-4 rounded-lg">
-                <div className="text-2xl font-bold text-purple-700">
+              <div className="bg-purple-50 dark:bg-purple-900/30 p-4 rounded-lg">
+                <div className="text-2xl font-bold text-purple-700 dark:text-purple-300">
                   {(selectedSecurityGroup.rules || []).filter(r => r.protocol === 'tcp').length}
                 </div>
-                <div className="text-sm text-purple-600">TCP 규칙</div>
+                <div className="text-sm text-purple-600 dark:text-purple-400">TCP 규칙</div>
               </div>
-              <div className="bg-amber-50 p-4 rounded-lg">
-                <div className="text-2xl font-bold text-amber-700">
+              <div className="bg-amber-50 dark:bg-amber-900/30 p-4 rounded-lg">
+                <div className="text-2xl font-bold text-amber-700 dark:text-amber-300">
                   {(selectedSecurityGroup.rules || []).filter(r => r.protocol === 'udp').length}
                 </div>
-                <div className="text-sm text-amber-600">UDP 규칙</div>
+                <div className="text-sm text-amber-600 dark:text-amber-400">UDP 규칙</div>
               </div>
             </div>
 
             {/* 규칙 테이블 */}
-            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-              <div className="px-6 py-3 bg-gray-50 border-b border-gray-200">
-                <h4 className="text-lg font-medium text-gray-900">보안규칙 목록</h4>
+            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+              <div className="px-6 py-3 bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
+                <h4 className="text-lg font-medium text-gray-900 dark:text-gray-100">보안규칙 목록</h4>
               </div>
               
               <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
+                <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                  <thead className="bg-gray-50 dark:bg-gray-700">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">방향</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IP 버전</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">프로토콜</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">포트 범위</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">소스/목적지</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">작업</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">방향</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">IP 버전</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">프로토콜</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">포트 범위</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">소스/목적지</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">작업</th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
+                  <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                     {(selectedSecurityGroup.rules || []).map((rule) => (
-                      <tr key={rule.id} className="hover:bg-gray-50 transition-colors">
+                      <tr key={rule.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                         <td className="px-6 py-4 whitespace-nowrap">
                           <span className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full ${getRuleTypeColor(rule.direction)}`}>
                             {rule.direction === 'ingress' ? '인바운드' : '아웃바운드'}
                           </span>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <span className="inline-flex px-2 py-1 text-xs font-medium bg-gray-100 text-gray-800 rounded">
+                          <span className="inline-flex px-2 py-1 text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded">
                             {rule.ethertype}
                           </span>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-mono">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 font-mono">
                           {getProtocolText(rule.protocol)}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-mono">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 font-mono">
                           {getPortText(rule.port_range_min, rule.port_range_max)}
                         </td>
-                        <td className="px-6 py-4 text-sm text-gray-900">
+                        <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100">
                           <div className="max-w-48 break-all" title={getSourceText(rule)}>
                             {getSourceText(rule)}
                           </div>
@@ -922,7 +922,7 @@ const NetworkPage: React.FC = () => {
                           <div className="flex items-center space-x-2">
                             <button
                               onClick={() => openEditRuleModal(rule)}
-                              className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-100 rounded-md hover:bg-blue-200 transition-colors"
+                              className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/50 rounded-md hover:bg-blue-200 dark:hover:bg-blue-800 transition-colors"
                               title="규칙 수정"
                             >
                               <Edit className="h-3 w-3 mr-1" />
@@ -930,7 +930,7 @@ const NetworkPage: React.FC = () => {
                             </button>
                             <button
                               onClick={() => handleDeleteRule(rule.id)}
-                              className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-red-600 bg-red-100 rounded-md hover:bg-red-200 transition-colors"
+                              className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/50 rounded-md hover:bg-red-200 dark:hover:bg-red-800 transition-colors"
                               title="규칙 삭제"
                             >
                               <Trash2 className="h-3 w-3 mr-1" />
@@ -944,16 +944,16 @@ const NetworkPage: React.FC = () => {
                 </table>
                 
                 {(!selectedSecurityGroup.rules || selectedSecurityGroup.rules.length === 0) && (
-                  <div className="text-center py-12 text-gray-500">
-                    <Shield className="h-12 w-12 mx-auto mb-4 text-gray-300" />
-                    <h4 className="text-lg font-medium text-gray-900 mb-2">보안규칙이 없습니다</h4>
+                  <div className="text-center py-12 text-gray-500 dark:text-gray-400">
+                    <Shield className="h-12 w-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
+                    <h4 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">보안규칙이 없습니다</h4>
                     <p className="text-sm">새로운 보안규칙을 추가하여 네트워크 액세스를 제어하세요.</p>
                     <button
                       onClick={() => {
                         resetRuleForm();
                         setShowCreateRuleModal(true);
                       }}
-                      className="mt-4 inline-flex items-center px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+                      className="mt-4 inline-flex items-center px-4 py-2 bg-blue-600 dark:bg-blue-700 text-white text-sm font-medium rounded-lg hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors"
                     >
                       <Plus className="h-4 w-4 mr-2" />
                       첫 번째 규칙 추가
@@ -964,12 +964,12 @@ const NetworkPage: React.FC = () => {
             </div>
 
             {/* 도움말 */}
-            <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div className="mt-6 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
               <div className="flex items-start">
-                <Settings className="h-5 w-5 text-blue-600 mt-0.5 mr-3" />
+                <Settings className="h-5 w-5 text-blue-600 dark:text-blue-400 mt-0.5 mr-3" />
                 <div>
-                  <h5 className="text-sm font-medium text-blue-800 mb-1">보안규칙 팁</h5>
-                  <ul className="text-sm text-blue-700 space-y-1">
+                  <h5 className="text-sm font-medium text-blue-800 dark:text-blue-300 mb-1">보안규칙 팁</h5>
+                  <ul className="text-sm text-blue-700 dark:text-blue-400 space-y-1">
                     <li>• 인바운드 규칙은 외부에서 인스턴스로 들어오는 트래픽을 제어합니다</li>
                     <li>• 아웃바운드 규칙은 인스턴스에서 외부로 나가는 트래픽을 제어합니다</li>
                     <li>• 포트 범위를 지정하거나 사전 정의된 서비스를 선택할 수 있습니다</li>
@@ -984,28 +984,28 @@ const NetworkPage: React.FC = () => {
 
       {/* 보안그룹 생성 모달 */}
       {showCreateSGModal && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center z-50">
-          <div className="relative p-8 border w-full max-w-md mx-auto bg-white rounded-lg shadow-lg">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">보안그룹 생성</h3>
+        <div className="fixed inset-0 bg-gray-600 dark:bg-gray-900 bg-opacity-50 dark:bg-opacity-70 overflow-y-auto h-full w-full flex items-center justify-center z-50">
+          <div className="relative p-8 border border-gray-200 dark:border-gray-700 w-full max-w-md mx-auto bg-white dark:bg-gray-800 rounded-lg shadow-lg">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">보안그룹 생성</h3>
             <div className="mb-4">
-              <label htmlFor="sgName" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="sgName" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 이름 *
               </label>
               <input
                 type="text"
                 id="sgName"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-blue-500 dark:focus:border-blue-400"
                 placeholder="보안그룹 이름"
                 required
               />
             </div>
             <div className="mb-4">
-              <label htmlFor="sgDescription" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="sgDescription" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 설명 (선택사항)
               </label>
               <textarea
                 id="sgDescription"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-blue-500 dark:focus:border-blue-400"
                 rows={3}
                 placeholder="보안그룹에 대한 설명"
               />
@@ -1013,7 +1013,7 @@ const NetworkPage: React.FC = () => {
             <div className="flex justify-end space-x-2">
               <button
                 onClick={() => setShowCreateSGModal(false)}
-                className="px-4 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400"
+                className="px-4 py-2 bg-gray-300 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-400 dark:hover:bg-gray-600"
               >
                 취소
               </button>
@@ -1023,7 +1023,7 @@ const NetworkPage: React.FC = () => {
                   const descriptionInput = document.getElementById('sgDescription') as HTMLTextAreaElement;
                   handleCreateSecurityGroup(nameInput.value, descriptionInput.value || '');
                 }}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                className="px-4 py-2 bg-blue-600 dark:bg-blue-700 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-600"
               >
                 생성
               </button>
@@ -1034,10 +1034,10 @@ const NetworkPage: React.FC = () => {
 
       {/* 보안그룹 규칙 추가/수정 모달 */}
       {(showCreateRuleModal || showEditRuleModal) && selectedSecurityGroup && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center z-50">
-          <div className="relative p-8 border w-full max-w-2xl mx-auto bg-white rounded-lg shadow-lg max-h-screen overflow-y-auto">
+        <div className="fixed inset-0 bg-gray-600 dark:bg-gray-900 bg-opacity-50 dark:bg-opacity-70 overflow-y-auto h-full w-full flex items-center justify-center z-50">
+          <div className="relative p-8 border border-gray-200 dark:border-gray-700 w-full max-w-2xl mx-auto bg-white dark:bg-gray-800 rounded-lg shadow-lg max-h-screen overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold text-gray-900">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
                 {showEditRuleModal ? '보안규칙 수정' : '보안규칙 추가'} - {selectedSecurityGroup.name}
               </h3>
               <button
@@ -1046,24 +1046,24 @@ const NetworkPage: React.FC = () => {
                   setShowEditRuleModal(false);
                   setEditingRule(null);
                 }}
-                className="text-gray-400 hover:text-gray-600"
+                className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
               >
-                <AlertTriangle className="h-6 w-6" />
+                <X className="h-6 w-6" />
               </button>
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* 기본 설정 */}
               <div className="space-y-4">
-                <h4 className="font-medium text-gray-900 border-b pb-2">기본 설정</h4>
+                <h4 className="font-medium text-gray-900 dark:text-gray-100 border-b border-gray-200 dark:border-gray-700 pb-2">기본 설정</h4>
                 
                 {/* 방향 */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">방향 *</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">방향 *</label>
                   <select
                     value={ruleFormData.direction}
                     onChange={(e) => setRuleFormData(prev => ({ ...prev, direction: e.target.value as 'ingress' | 'egress' }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-blue-500 dark:focus:border-blue-400"
                   >
                     <option value="ingress">인바운드 (Ingress)</option>
                     <option value="egress">아웃바운드 (Egress)</option>
@@ -1072,11 +1072,11 @@ const NetworkPage: React.FC = () => {
 
                 {/* IP 버전 */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">IP 버전</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP 버전</label>
                   <select
                     value={ruleFormData.ethertype}
                     onChange={(e) => setRuleFormData(prev => ({ ...prev, ethertype: e.target.value as 'IPv4' | 'IPv6' }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-blue-500 dark:focus:border-blue-400"
                   >
                     <option value="IPv4">IPv4</option>
                     <option value="IPv6">IPv6</option>
@@ -1085,23 +1085,23 @@ const NetworkPage: React.FC = () => {
 
                 {/* 서비스 타입 */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">서비스 설정</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">서비스 설정</label>
                   <div className="flex space-x-4 mb-3">
-                    <label className="flex items-center">
+                    <label className="flex items-center text-gray-700 dark:text-gray-300">
                       <input
                         type="radio"
                         checked={ruleFormData.serviceType === 'predefined'}
                         onChange={() => setRuleFormData(prev => ({ ...prev, serviceType: 'predefined' }))}
-                        className="mr-2"
+                        className="mr-2 text-blue-600 dark:text-blue-400"
                       />
                       사전 정의된 서비스
                     </label>
-                    <label className="flex items-center">
+                    <label className="flex items-center text-gray-700 dark:text-gray-300">
                       <input
                         type="radio"
                         checked={ruleFormData.serviceType === 'custom'}
                         onChange={() => setRuleFormData(prev => ({ ...prev, serviceType: 'custom' }))}
-                        className="mr-2"
+                        className="mr-2 text-blue-600 dark:text-blue-400"
                       />
                       사용자 정의
                     </label>
@@ -1111,7 +1111,7 @@ const NetworkPage: React.FC = () => {
                     <select
                       value={ruleFormData.predefinedService}
                       onChange={(e) => handleServiceChange(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-blue-500 dark:focus:border-blue-400"
                     >
                       {PREDEFINED_SERVICES.map(service => (
                         <option key={service.name} value={service.name}>
@@ -1125,17 +1125,17 @@ const NetworkPage: React.FC = () => {
 
               {/* 프로토콜 및 포트 설정 */}
               <div className="space-y-4">
-                <h4 className="font-medium text-gray-900 border-b pb-2">프로토콜 및 포트</h4>
+                <h4 className="font-medium text-gray-900 dark:text-gray-100 border-b border-gray-200 dark:border-gray-700 pb-2">프로토콜 및 포트</h4>
                 
                 {(ruleFormData.serviceType === 'custom' || ruleFormData.predefinedService === 'Custom') && (
                   <>
                     {/* 프로토콜 */}
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">프로토콜</label>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">프로토콜</label>
                       <select
                         value={ruleFormData.protocol}
                         onChange={(e) => setRuleFormData(prev => ({ ...prev, protocol: e.target.value }))}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-blue-500 dark:focus:border-blue-400"
                       >
                         <option value="">Any</option>
                         <option value="tcp">TCP</option>
@@ -1148,7 +1148,7 @@ const NetworkPage: React.FC = () => {
                     {ruleFormData.protocol && ruleFormData.protocol !== 'icmp' && (
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">시작 포트</label>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">시작 포트</label>
                           <input
                             type="number"
                             value={ruleFormData.portRangeMin || ''}
@@ -1156,14 +1156,14 @@ const NetworkPage: React.FC = () => {
                               ...prev, 
                               portRangeMin: e.target.value ? parseInt(e.target.value) : null 
                             }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-blue-500 dark:focus:border-blue-400"
                             placeholder="예: 80"
                             min="1"
                             max="65535"
                           />
                         </div>
                         <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">종료 포트</label>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">종료 포트</label>
                           <input
                             type="number"
                             value={ruleFormData.portRangeMax || ''}
@@ -1171,7 +1171,7 @@ const NetworkPage: React.FC = () => {
                               ...prev, 
                               portRangeMax: e.target.value ? parseInt(e.target.value) : null 
                             }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-blue-500 dark:focus:border-blue-400"
                             placeholder="예: 80"
                             min="1"
                             max="65535"

@@ -37,9 +37,34 @@ const ImagesPage: React.FC = () => {
       console.log('퍼블릭 이미지 수:', allImages.filter((img: any) => img.visibility === 'public').length);
       
       setImages(filteredImages);
-    } catch (error) {
+    } catch (error: any) {
       console.error('이미지 로딩 실패:', error);
-      toast.error('이미지 목록을 불러오는데 실패했습니다.');
+      
+      // 상세한 에러 메시지 추출
+      let errorMessage = '이미지 목록을 불러오는데 실패했습니다.';
+      
+      if (error?.response?.data) {
+        const errorData = error.response.data;
+        if (typeof errorData === 'string') {
+          errorMessage = errorData;
+        } else if (errorData.error?.message) {
+          errorMessage = errorData.error.message;
+        } else if (errorData.message) {
+          errorMessage = errorData.message;
+        }
+      } else if (error?.message) {
+        errorMessage = error.message;
+      }
+      
+      // 네트워크 오류인 경우 추가 정보 제공
+      if (error?.code === 'ECONNREFUSED' || error?.code === 'ETIMEDOUT') {
+        errorMessage = '이미지 서비스에 연결할 수 없습니다. 서버 상태를 확인해주세요.';
+      }
+      
+      toast.error(errorMessage, { duration: 5000 });
+      
+      // 에러가 발생해도 빈 배열로 설정하여 UI가 계속 표시되도록 함
+      setImages([]);
     } finally {
       setLoading(false);
     }

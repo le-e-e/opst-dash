@@ -6,6 +6,7 @@ export default defineConfig({
   server: {
     port: 3000,
     host: true,
+    allowedHosts: ['leee.cloud', 'localhost'],
     proxy: {
       // Keystone API 프록시
       '/keystone': {
@@ -85,6 +86,27 @@ export default defineConfig({
           proxy.on('error', (err, req, res) => {
             console.log('Heat-cfn proxy error', err);
           });
+        }
+      },
+      // Cloudflare API 프록시 (CORS 우회)
+      '/cloudflare': {
+        target: 'https://api.cloudflare.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/cloudflare/, '/client/v4'),
+        configure: (proxy, options) => {
+          proxy.on('error', (err, req, res) => {
+            console.log('Cloudflare proxy error', err);
+          });
+          proxy.on('proxyReq', (proxyReq, req, res) => {
+            // 요청 헤더가 제대로 전달되는지 확인
+            console.log('Cloudflare proxy request:', req.method, req.url);
+            console.log('Authorization header present:', !!req.headers.authorization);
+          });
+        },
+        secure: true, // HTTPS 인증서 검증
+        // 프록시 요청 시 원본 헤더 유지 (특히 Authorization 헤더)
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest'
         }
       }
     }

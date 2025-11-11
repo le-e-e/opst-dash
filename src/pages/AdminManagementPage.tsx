@@ -174,11 +174,11 @@ const AdminManagementPage: React.FC = () => {
   // 관리자가 아닌 경우 접근 제한
   if (!isAdmin) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
         <div className="text-center">
-          <AlertTriangle className="h-16 w-16 text-red-500 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">관리자 권한이 필요합니다</h2>
-          <p className="text-gray-600">이 페이지는 OpenStack 관리자만 접근할 수 있습니다.</p>
+          <AlertTriangle className="h-16 w-16 text-red-500 dark:text-red-400 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2">관리자 권한이 필요합니다</h2>
+          <p className="text-gray-600 dark:text-gray-400">이 페이지는 OpenStack 관리자만 접근할 수 있습니다.</p>
         </div>
       </div>
     );
@@ -316,52 +316,52 @@ const AdminManagementPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 flex items-center">
-            <Crown className="h-8 w-8 mr-3 text-purple-600" />
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 flex items-center">
+            <Crown className="h-8 w-8 mr-3 text-purple-600 dark:text-purple-400" />
             시스템 관리
           </h1>
-          <p className="mt-2 text-gray-600">
+          <p className="mt-2 text-gray-600 dark:text-gray-400">
             OpenStack 사용자, 프로젝트 및 권한을 관리합니다.
           </p>
         </div>
 
         {/* 통계 카드 */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-white rounded-lg shadow p-6">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
             <div className="flex items-center">
-              <div className="p-2 bg-blue-100 rounded-lg">
-                <Users className="h-6 w-6 text-blue-600" />
+              <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+                <Users className="h-6 w-6 text-blue-600 dark:text-blue-400" />
               </div>
               <div className="ml-4">
-                <p className="text-sm font-medium text-gray-500">전체 사용자</p>
-                <p className="text-2xl font-bold text-gray-900">{allUsers.length}</p>
+                <p className="text-sm font-medium text-gray-500 dark:text-gray-400">전체 사용자</p>
+                <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{allUsers.length}</p>
               </div>
             </div>
           </div>
 
-          <div className="bg-white rounded-lg shadow p-6">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
             <div className="flex items-center">
-              <div className="p-2 bg-green-100 rounded-lg">
-                <Building2 className="h-6 w-6 text-green-600" />
+              <div className="p-2 bg-green-100 dark:bg-green-900/30 rounded-lg">
+                <Building2 className="h-6 w-6 text-green-600 dark:text-green-400" />
               </div>
               <div className="ml-4">
-                <p className="text-sm font-medium text-gray-500">전체 프로젝트</p>
-                <p className="text-2xl font-bold text-gray-900">{allProjects.length}</p>
+                <p className="text-sm font-medium text-gray-500 dark:text-gray-400">전체 프로젝트</p>
+                <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{allProjects.length}</p>
               </div>
             </div>
           </div>
 
-          <div className="bg-white rounded-lg shadow p-6">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
             <div className="flex items-center">
-              <div className="p-2 bg-purple-100 rounded-lg">
-                <CheckCircle className="h-6 w-6 text-purple-600" />
+              <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
+                <CheckCircle className="h-6 w-6 text-purple-600 dark:text-purple-400" />
               </div>
               <div className="ml-4">
-                <p className="text-sm font-medium text-gray-500">활성 프로젝트</p>
-                <p className="text-2xl font-bold text-gray-900">
+                <p className="text-sm font-medium text-gray-500 dark:text-gray-400">활성 프로젝트</p>
+                <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">
                   {allProjects.filter(p => p.enabled).length}
                 </p>
               </div>
@@ -370,15 +370,15 @@ const AdminManagementPage: React.FC = () => {
         </div>
 
         {/* 탭 네비게이션 */}
-        <div className="bg-white rounded-lg shadow mb-6">
-          <div className="border-b border-gray-200">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow mb-6">
+          <div className="border-b border-gray-200 dark:border-gray-700">
             <nav className="-mb-px flex">
               <button
                 onClick={() => setActiveTab('users')}
                 className={`py-4 px-6 text-sm font-medium ${
                   activeTab === 'users'
-                    ? 'border-b-2 border-blue-500 text-blue-600'
-                    : 'text-gray-500 hover:text-gray-700'
+                    ? 'border-b-2 border-blue-500 dark:border-blue-400 text-blue-600 dark:text-blue-400'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
                 }`}
               >
                 <Users className="h-4 w-4 inline mr-2" />
@@ -388,8 +388,8 @@ const AdminManagementPage: React.FC = () => {
                 onClick={() => setActiveTab('projects')}
                 className={`py-4 px-6 text-sm font-medium ${
                   activeTab === 'projects'
-                    ? 'border-b-2 border-blue-500 text-blue-600'
-                    : 'text-gray-500 hover:text-gray-700'
+                    ? 'border-b-2 border-blue-500 dark:border-blue-400 text-blue-600 dark:text-blue-400'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
                 }`}
               >
                 <Building2 className="h-4 w-4 inline mr-2" />
@@ -399,8 +399,8 @@ const AdminManagementPage: React.FC = () => {
                 onClick={() => setActiveTab('assignments')}
                 className={`py-4 px-6 text-sm font-medium ${
                   activeTab === 'assignments'
-                    ? 'border-b-2 border-blue-500 text-blue-600'
-                    : 'text-gray-500 hover:text-gray-700'
+                    ? 'border-b-2 border-blue-500 dark:border-blue-400 text-blue-600 dark:text-blue-400'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
                 }`}
               >
                 <LinkIcon className="h-4 w-4 inline mr-2" />
@@ -420,17 +420,17 @@ const AdminManagementPage: React.FC = () => {
                 {activeTab === 'users' && (
                   <div className="space-y-6">
                     {/* 승인 대기 중인 사용자 섹션 */}
-                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                    <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center">
-                          <AlertTriangle className="h-5 w-5 text-yellow-600 mr-2" />
-                          <h3 className="text-lg font-medium text-yellow-800">
+                          <AlertTriangle className="h-5 w-5 text-yellow-600 dark:text-yellow-400 mr-2" />
+                          <h3 className="text-lg font-medium text-yellow-800 dark:text-yellow-300">
                             승인 대기 중인 사용자 ({pendingUsers.length}명)
                           </h3>
                         </div>
                         <button
                           onClick={loadPendingData}
-                          className="flex items-center px-3 py-1 text-sm bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
+                          className="flex items-center px-3 py-1 text-sm bg-yellow-600 dark:bg-yellow-700 text-white rounded-md hover:bg-yellow-700 dark:hover:bg-yellow-600"
                         >
                           <RefreshCw className="h-4 w-4 mr-1" />
                           새로고침
@@ -439,16 +439,16 @@ const AdminManagementPage: React.FC = () => {
                       {pendingUsers.length > 0 ? (
                         <div className="space-y-3">
                           {pendingUsers.map((user) => (
-                            <div key={user.id} className="bg-white border border-yellow-200 rounded-md p-3">
+                            <div key={user.id} className="bg-white dark:bg-gray-800 border border-yellow-200 dark:border-yellow-800 rounded-md p-3">
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center">
-                                  <div className="bg-yellow-100 rounded-full p-2 mr-3">
-                                    <UserIcon className="h-4 w-4 text-yellow-600" />
+                                  <div className="bg-yellow-100 dark:bg-yellow-900/30 rounded-full p-2 mr-3">
+                                    <UserIcon className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
                                   </div>
                                   <div>
-                                    <div className="text-sm font-medium text-gray-900">{user.name}</div>
-                                    <div className="text-sm text-gray-500">{user.username}</div>
-                                    <div className="text-xs text-gray-400">
+                                    <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{user.name}</div>
+                                    <div className="text-sm text-gray-500 dark:text-gray-400">{user.username}</div>
+                                    <div className="text-xs text-gray-400 dark:text-gray-500">
                                       등록일: {new Date(user.registeredAt).toLocaleDateString()}
                                     </div>
                                   </div>
@@ -474,13 +474,13 @@ const AdminManagementPage: React.FC = () => {
                           ))}
                         </div>
                       ) : (
-                        <p className="text-sm text-yellow-700">대기 중인 사용자가 없습니다.</p>
+                        <p className="text-sm text-yellow-700 dark:text-yellow-400">대기 중인 사용자가 없습니다.</p>
                       )}
                     </div>
 
                     {/* 기존 사용자 목록 */}
                     <div className="flex justify-between items-center">
-                      <h3 className="text-lg font-medium text-gray-900">
+                      <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                         활성 사용자 목록 ({allUsers.filter(u => u.enabled).length}명)
                       </h3>
                       <button
@@ -493,43 +493,43 @@ const AdminManagementPage: React.FC = () => {
                     </div>
 
                     <div className="overflow-x-auto">
-                      <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50">
+                      <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                        <thead className="bg-gray-50 dark:bg-gray-700">
                           <tr>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                               사용자 정보
                             </th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                               상태
                             </th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                               도메인
                             </th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                               작업
                             </th>
                           </tr>
                         </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
+                        <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                           {allUsers.map((user) => (
-                            <tr key={user.id}>
+                            <tr key={user.id} className="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
                               <td className="px-6 py-4 whitespace-nowrap">
                                 <div className="flex items-center">
-                                  <div className="bg-gray-100 rounded-full p-2 mr-3">
-                                    <UserIcon className="h-5 w-5 text-gray-600" />
+                                  <div className="bg-gray-100 dark:bg-gray-700 rounded-full p-2 mr-3">
+                                    <UserIcon className="h-5 w-5 text-gray-600 dark:text-gray-400" />
                                   </div>
                                   <div>
-                                    <div className="text-sm font-medium text-gray-900">
+                                    <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
                                       {user.name}
                                     </div>
                                     {user.email && (
-                                      <div className="text-sm text-gray-500 flex items-center">
+                                      <div className="text-sm text-gray-500 dark:text-gray-400 flex items-center">
                                         <Mail className="h-3 w-3 mr-1" />
                                         {user.email}
                                       </div>
                                     )}
                                     {user.description && (
-                                      <div className="text-sm text-gray-500">{user.description}</div>
+                                      <div className="text-sm text-gray-500 dark:text-gray-400">{user.description}</div>
                                     )}
                                   </div>
                                 </div>
@@ -537,8 +537,8 @@ const AdminManagementPage: React.FC = () => {
                               <td className="px-6 py-4 whitespace-nowrap">
                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                                   user.enabled 
-                                    ? 'bg-green-100 text-green-800' 
-                                    : 'bg-red-100 text-red-800'
+                                    ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200' 
+                                    : 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'
                                 }`}>
                                   {user.enabled ? (
                                     <>
@@ -553,7 +553,7 @@ const AdminManagementPage: React.FC = () => {
                                   )}
                                 </span>
                               </td>
-                              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                                 {user.domain_id}
                               </td>
                               <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
@@ -563,7 +563,7 @@ const AdminManagementPage: React.FC = () => {
                                     id: user.id, 
                                     name: user.name 
                                   })}
-                                  className="text-red-600 hover:text-red-900"
+                                  className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 transition-colors"
                                   disabled={loading}
                                 >
                                   <Trash2 className="h-4 w-4" />
@@ -581,7 +581,7 @@ const AdminManagementPage: React.FC = () => {
                 {activeTab === 'projects' && (
                   <div className="space-y-4">
                     <div className="flex justify-between items-center">
-                      <h3 className="text-lg font-medium text-gray-900">프로젝트 목록</h3>
+                      <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">프로젝트 목록</h3>
                       <button
                         onClick={() => setShowCreateProjectModal(true)}
                         className="btn btn-primary flex items-center space-x-1"
@@ -593,28 +593,28 @@ const AdminManagementPage: React.FC = () => {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                       {allProjects.map((project) => (
-                        <div key={project.id} className="border border-gray-200 rounded-lg p-4">
+                        <div key={project.id} className="border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg p-4">
                           <div className="flex items-start justify-between">
                             <div className="flex-1">
                               <div className="flex items-center space-x-2 mb-2">
-                                <Building2 className="h-5 w-5 text-blue-600" />
-                                <h4 className="text-lg font-medium text-gray-900">
+                                <Building2 className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                                <h4 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                                   {project.name}
                                 </h4>
                                 <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
                                   project.enabled 
-                                    ? 'bg-green-100 text-green-800' 
-                                    : 'bg-red-100 text-red-800'
+                                    ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200' 
+                                    : 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200'
                                 }`}>
                                   {project.enabled ? '활성' : '비활성'}
                                 </span>
                               </div>
                               {project.description && (
-                                <p className="text-sm text-gray-600 mb-2">
+                                <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
                                   {project.description}
                                 </p>
                               )}
-                              <div className="text-xs text-gray-500">
+                              <div className="text-xs text-gray-500 dark:text-gray-400">
                                 <div>ID: {project.id}</div>
                                 <div>도메인: {project.domain_id}</div>
                               </div>
@@ -625,7 +625,7 @@ const AdminManagementPage: React.FC = () => {
                                 id: project.id, 
                                 name: project.name 
                               })}
-                              className="text-red-600 hover:text-red-900 ml-2"
+                              className="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 ml-2 transition-colors"
                               disabled={loading}
                             >
                               <Trash2 className="h-4 w-4" />
@@ -641,7 +641,7 @@ const AdminManagementPage: React.FC = () => {
                 {activeTab === 'assignments' && (
                   <div className="space-y-4">
                     <div className="flex justify-between items-center">
-                      <h3 className="text-lg font-medium text-gray-900">사용자-프로젝트 할당</h3>
+                      <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">사용자-프로젝트 할당</h3>
                       <button
                         onClick={() => setShowAssignModal(true)}
                         className="btn btn-primary flex items-center space-x-1"
@@ -651,13 +651,13 @@ const AdminManagementPage: React.FC = () => {
                       </button>
                     </div>
 
-                    <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+                    <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-md p-4">
                       <div className="flex">
                         <div className="ml-3">
-                          <h3 className="text-sm font-medium text-blue-800">
+                          <h3 className="text-sm font-medium text-blue-800 dark:text-blue-300">
                             권한 할당 안내
                           </h3>
-                          <div className="mt-2 text-sm text-blue-700">
+                          <div className="mt-2 text-sm text-blue-700 dark:text-blue-400">
                             <p>• 사용자를 프로젝트에 할당하면 해당 프로젝트의 리소스에 접근할 수 있습니다.</p>
                             <p>• 각 사용자는 여러 프로젝트에 할당될 수 있습니다.</p>
                             <p>• 관리자는 모든 프로젝트에 접근할 수 있습니다.</p>
@@ -675,16 +675,16 @@ const AdminManagementPage: React.FC = () => {
 
       {/* 사용자 생성 모달 */}
       {showCreateUserModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 dark:bg-opacity-70 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 border border-gray-200 dark:border-gray-700">
             <div className="flex items-center mb-4">
-              <UserPlus className="h-6 w-6 text-blue-600 mr-3" />
-              <h3 className="text-lg font-medium text-gray-900">새 사용자 생성</h3>
+              <UserPlus className="h-6 w-6 text-blue-600 dark:text-blue-400 mr-3" />
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">새 사용자 생성</h3>
             </div>
             
             <form onSubmit={handleCreateUser} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   사용자명 *
                 </label>
                 <input
@@ -698,7 +698,7 @@ const AdminManagementPage: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   비밀번호 *
                 </label>
                 <div className="relative">
@@ -716,16 +716,16 @@ const AdminManagementPage: React.FC = () => {
                     className="absolute inset-y-0 right-0 pr-3 flex items-center"
                   >
                     {showPassword ? (
-                      <EyeOff className="h-4 w-4 text-gray-400" />
+                      <EyeOff className="h-4 w-4 text-gray-400 dark:text-gray-500" />
                     ) : (
-                      <Eye className="h-4 w-4 text-gray-400" />
+                      <Eye className="h-4 w-4 text-gray-400 dark:text-gray-500" />
                     )}
                   </button>
                 </div>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   이메일
                 </label>
                 <input
@@ -738,7 +738,7 @@ const AdminManagementPage: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   설명
                 </label>
                 <textarea
@@ -756,16 +756,16 @@ const AdminManagementPage: React.FC = () => {
                   id="createProject"
                   checked={createUserForm.createProject}
                   onChange={(e) => setCreateUserForm(prev => ({ ...prev, createProject: e.target.checked }))}
-                  className="h-4 w-4 text-blue-600 rounded"
+                  className="h-4 w-4 text-blue-600 dark:text-blue-400 rounded border-gray-300 dark:border-gray-600"
                 />
-                <label htmlFor="createProject" className="text-sm text-gray-700">
+                <label htmlFor="createProject" className="text-sm text-gray-700 dark:text-gray-300">
                   개인 프로젝트 함께 생성
                 </label>
               </div>
 
               {createUserForm.createProject && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                     프로젝트명
                   </label>
                   <input
@@ -782,7 +782,7 @@ const AdminManagementPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowCreateUserModal(false)}
-                  className="btn bg-gray-200 text-gray-800 hover:bg-gray-300"
+                  className="btn bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600"
                 >
                   취소
                 </button>
@@ -801,16 +801,16 @@ const AdminManagementPage: React.FC = () => {
 
       {/* 프로젝트 생성 모달 */}
       {showCreateProjectModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 dark:bg-opacity-70 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 border border-gray-200 dark:border-gray-700">
             <div className="flex items-center mb-4">
-              <FolderPlus className="h-6 w-6 text-green-600 mr-3" />
-              <h3 className="text-lg font-medium text-gray-900">새 프로젝트 생성</h3>
+              <FolderPlus className="h-6 w-6 text-green-600 dark:text-green-400 mr-3" />
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">새 프로젝트 생성</h3>
             </div>
             
             <form onSubmit={handleCreateProject} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   프로젝트명 *
                 </label>
                 <input
@@ -824,7 +824,7 @@ const AdminManagementPage: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   설명
                 </label>
                 <textarea
@@ -840,7 +840,7 @@ const AdminManagementPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowCreateProjectModal(false)}
-                  className="btn bg-gray-200 text-gray-800 hover:bg-gray-300"
+                  className="btn bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600"
                 >
                   취소
                 </button>
@@ -859,16 +859,16 @@ const AdminManagementPage: React.FC = () => {
 
       {/* 권한 할당 모달 */}
       {showAssignModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 dark:bg-opacity-70 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 border border-gray-200 dark:border-gray-700">
             <div className="flex items-center mb-4">
-              <LinkIcon className="h-6 w-6 text-purple-600 mr-3" />
-              <h3 className="text-lg font-medium text-gray-900">사용자-프로젝트 할당</h3>
+              <LinkIcon className="h-6 w-6 text-purple-600 dark:text-purple-400 mr-3" />
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">사용자-프로젝트 할당</h3>
             </div>
             
             <form onSubmit={handleAssignUser} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   사용자 선택 *
                 </label>
                 <select
@@ -887,7 +887,7 @@ const AdminManagementPage: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   프로젝트 선택 *
                 </label>
                 <select
@@ -905,8 +905,8 @@ const AdminManagementPage: React.FC = () => {
                 </select>
               </div>
 
-              <div className="bg-yellow-50 border border-yellow-200 rounded-md p-3">
-                <p className="text-sm text-yellow-800">
+              <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md p-3">
+                <p className="text-sm text-yellow-800 dark:text-yellow-300">
                   사용자에게 선택된 프로젝트의 member 역할이 할당됩니다.
                 </p>
               </div>
@@ -915,7 +915,7 @@ const AdminManagementPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowAssignModal(false)}
-                  className="btn bg-gray-200 text-gray-800 hover:bg-gray-300"
+                  className="btn bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600"
                 >
                   취소
                 </button>
@@ -934,28 +934,28 @@ const AdminManagementPage: React.FC = () => {
 
       {/* 삭제 확인 모달 */}
       {confirmDelete && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 dark:bg-opacity-70 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 border border-gray-200 dark:border-gray-700">
             <div className="flex items-center mb-4">
-              <AlertTriangle className="h-6 w-6 text-red-600 mr-3" />
-              <h3 className="text-lg font-medium text-gray-900">
+              <AlertTriangle className="h-6 w-6 text-red-600 dark:text-red-400 mr-3" />
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
                 {confirmDelete.type === 'user' ? '사용자' : '프로젝트'} 삭제
               </h3>
             </div>
-            <p className="text-gray-600 mb-6">
+            <p className="text-gray-600 dark:text-gray-400 mb-6">
               정말로 {confirmDelete.type === 'user' ? '사용자' : '프로젝트'} "{confirmDelete.name}"를 
               삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.
             </p>
             <div className="flex justify-end space-x-3">
               <button
                 onClick={() => setConfirmDelete(null)}
-                className="btn bg-gray-200 text-gray-800 hover:bg-gray-300"
+                className="btn bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600"
               >
                 취소
               </button>
               <button
                 onClick={handleDelete}
-                className="btn bg-red-600 text-white hover:bg-red-700"
+                className="btn bg-red-600 dark:bg-red-700 text-white hover:bg-red-700 dark:hover:bg-red-600"
                 disabled={loading}
               >
                 삭제

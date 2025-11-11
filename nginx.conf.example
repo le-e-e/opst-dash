@@ -1,0 +1,286 @@
+# OpenStack Dashboard Nginx 설정 파일
+# 이 파일을 /etc/nginx/sites-available/opst-dash 또는 /etc/nginx/conf.d/opst-dash.conf로 복사하세요
+# sudo cp nginx.conf.example /etc/nginx/sites-available/opst-dash
+# sudo ln -s /etc/nginx/sites-available/opst-dash /etc/nginx/sites-enabled/
+# sudo nginx -t  # 설정 테스트
+# sudo systemctl reload nginx  # nginx 재시작
+
+# Cloudflare의 X-Forwarded-Proto 헤더 처리
+# Cloudflare가 전달하는 헤더를 우선 사용, 없으면 $scheme 사용
+map $http_x_forwarded_proto $forwarded_proto {
+    '' $scheme;
+    default $http_x_forwarded_proto;
+}
+
+# HTTP 서버 (Cloudflare Flexible 모드 사용 시)
+# Cloudflare가 HTTPS를 처리하고 nginx는 HTTP(포트 80)로 받음
+server {
+    listen 80;
+    server_name leee.cloud www.leee.cloud;
+    
+    # Cloudflare의 실제 클라이언트 IP를 가져오기 위한 설정
+    # Cloudflare IP 대역에서 오는 요청에 대해서만 신뢰
+    set_real_ip_from 173.245.48.0/20;
+    set_real_ip_from 103.21.244.0/22;
+    set_real_ip_from 103.22.200.0/22;
+    set_real_ip_from 103.31.4.0/22;
+    set_real_ip_from 141.101.64.0/18;
+    set_real_ip_from 108.162.192.0/18;
+    set_real_ip_from 190.93.240.0/20;
+    set_real_ip_from 188.114.96.0/20;
+    set_real_ip_from 197.234.240.0/22;
+    set_real_ip_from 198.41.128.0/17;
+    set_real_ip_from 162.158.0.0/15;
+    set_real_ip_from 104.16.0.0/13;
+    set_real_ip_from 104.24.0.0/14;
+    set_real_ip_from 172.64.0.0/13;
+    set_real_ip_from 131.0.72.0/22;
+    real_ip_header CF-Connecting-IP;
+    
+    # React 앱 빌드 파일 위치 (프로덕션)
+    root /home/lee/opst-dash/dist;
+    index index.html;
+
+    # 로그 설정
+    access_log /var/log/nginx/opst-dash-access.log;
+    error_log /var/log/nginx/opst-dash-error.log;
+
+    # 클라이언트 최대 업로드 크기
+    client_max_body_size 100M;
+
+    # Gzip 압축
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css text/xml text/javascript application/javascript application/json application/xml;
+
+    # React Router를 위한 설정 - 모든 경로를 index.html로
+    location / {
+        try_files $uri $uri/ /index.html;
+        
+        # React 앱을 로컬에서 실행하는 경우 (개발)
+        # proxy_pass http://localhost:3000;
+        # proxy_http_version 1.1;
+        # proxy_set_header Upgrade $http_upgrade;
+        # proxy_set_header Connection 'upgrade';
+        # proxy_set_header Host $host;
+        # proxy_cache_bypass $http_upgrade;
+    }
+
+    # VNC noVNC 정적 파일 프록시
+    location /novnc {
+        proxy_pass http://192.168.0.25:6080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # Cloudflare의 X-Forwarded-Proto 헤더를 우선 사용, 없으면 $scheme 사용
+        proxy_set_header X-Forwarded-Proto $forwarded_proto;
+        
+        # 정적 파일 캐싱
+        proxy_cache_valid 200 302 10m;
+        proxy_cache_valid 404 1m;
+    }
+
+    # VNC WebSocket 프록시 (websockify) - 필수!
+    location /websockify {
+        proxy_pass http://192.168.0.25:6080;
+        proxy_http_version 1.1;
+        
+        # WebSocket 업그레이드 헤더 (필수!)
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # 기본 프록시 헤더
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # Cloudflare의 X-Forwarded-Proto 헤더를 우선 사용, 없으면 $scheme 사용
+        proxy_set_header X-Forwarded-Proto $forwarded_proto;
+        
+        # WebSocket 타임아웃 (긴 세션 유지 - 24시간)
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+        
+        # 버퍼링 비활성화 (WebSocket에 필수)
+        proxy_buffering off;
+        proxy_cache off;
+        
+        # WebSocket 연결 유지
+        keepalive_timeout 86400;
+    }
+
+    # Keystone Identity API 프록시
+    location /keystone {
+        proxy_pass http://192.168.0.25:5000/v3;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $forwarded_proto;
+        
+        # CORS 헤더 (필요한 경우)
+        add_header Access-Control-Allow-Origin *;
+        add_header Access-Control-Allow-Methods 'GET, POST, PUT, DELETE, OPTIONS';
+        add_header Access-Control-Allow-Headers 'Authorization, Content-Type, X-Auth-Token, X-Subject-Token';
+        
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+    }
+
+    # Nova Compute API 프록시
+    location /nova {
+        proxy_pass http://192.168.0.25:8774/v2.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $forwarded_proto;
+        
+        # CORS 헤더
+        add_header Access-Control-Allow-Origin *;
+        add_header Access-Control-Allow-Methods 'GET, POST, PUT, DELETE, OPTIONS';
+        add_header Access-Control-Allow-Headers 'Authorization, Content-Type, X-Auth-Token';
+        
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+    }
+
+    # Neutron Networking API 프록시
+    location /neutron {
+        proxy_pass http://192.168.0.25:9696;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $forwarded_proto;
+        
+        # CORS 헤더
+        add_header Access-Control-Allow-Origin *;
+        add_header Access-Control-Allow-Methods 'GET, POST, PUT, DELETE, OPTIONS';
+        add_header Access-Control-Allow-Headers 'Authorization, Content-Type, X-Auth-Token';
+        
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+    }
+
+    # Glance Image API 프록시
+    location /glance {
+        # Glance는 /v2 경로를 사용하므로 /glance 접두사를 제거
+        rewrite ^/glance/(.*)$ /$1 break;
+        proxy_pass http://192.168.0.25:9292;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $forwarded_proto;
+        
+        # CORS 헤더
+        add_header Access-Control-Allow-Origin *;
+        add_header Access-Control-Allow-Methods 'GET, POST, PUT, DELETE, OPTIONS, HEAD';
+        add_header Access-Control-Allow-Headers 'Authorization, Content-Type, X-Auth-Token, Accept, X-Image-Meta-Protocol';
+        
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+    }
+
+    # Cinder Volume API 프록시
+    location /cinder {
+        proxy_pass http://192.168.0.25:8776;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $forwarded_proto;
+        
+        # CORS 헤더
+        add_header Access-Control-Allow-Origin *;
+        add_header Access-Control-Allow-Methods 'GET, POST, PUT, DELETE, OPTIONS';
+        add_header Access-Control-Allow-Headers 'Authorization, Content-Type, X-Auth-Token';
+        
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+    }
+
+    # Placement API 프록시
+    location /placement {
+        proxy_pass http://192.168.0.25:8780;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $forwarded_proto;
+        
+        # CORS 헤더
+        add_header Access-Control-Allow-Origin *;
+        add_header Access-Control-Allow-Methods 'GET, POST, PUT, DELETE, OPTIONS';
+        add_header Access-Control-Allow-Headers 'Authorization, Content-Type, X-Auth-Token';
+        
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+    }
+
+    # 정적 파일 캐싱
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+}
+
+# HTTPS 설정 (Cloudflare Full 또는 Full (strict) 모드 사용 시)
+# Cloudflare가 원본 서버와도 HTTPS로 통신하는 경우 아래 주석을 해제하세요
+# Let's Encrypt 또는 다른 SSL 인증서가 필요합니다
+# server {
+#     listen 443 ssl http2;
+#     server_name leee.cloud www.leee.cloud;
+#     
+#     # Cloudflare의 실제 클라이언트 IP를 가져오기 위한 설정 (위와 동일)
+#     set_real_ip_from 173.245.48.0/20;
+#     set_real_ip_from 103.21.244.0/22;
+#     set_real_ip_from 103.22.200.0/22;
+#     set_real_ip_from 103.31.4.0/22;
+#     set_real_ip_from 141.101.64.0/18;
+#     set_real_ip_from 108.162.192.0/18;
+#     set_real_ip_from 190.93.240.0/20;
+#     set_real_ip_from 188.114.96.0/20;
+#     set_real_ip_from 197.234.240.0/22;
+#     set_real_ip_from 198.41.128.0/17;
+#     set_real_ip_from 162.158.0.0/15;
+#     set_real_ip_from 104.16.0.0/13;
+#     set_real_ip_from 104.24.0.0/14;
+#     set_real_ip_from 172.64.0.0/13;
+#     set_real_ip_from 131.0.72.0/22;
+#     real_ip_header CF-Connecting-IP;
+#     
+#     ssl_certificate /etc/letsencrypt/live/leee.cloud/fullchain.pem;
+#     ssl_certificate_key /etc/letsencrypt/live/leee.cloud/privkey.pem;
+#     
+#     # SSL 설정
+#     ssl_protocols TLSv1.2 TLSv1.3;
+#     ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+#     ssl_prefer_server_ciphers off;
+#     ssl_session_cache shared:SSL:10m;
+#     ssl_session_timeout 10m;
+#     
+#     # Cloudflare 인증서 검증 (Full strict 모드용)
+#     # ssl_trusted_certificate /etc/nginx/cloudflare-origin.crt;
+#     # ssl_verify_client on;
+#     
+#     # 위의 모든 location 블록을 여기에 복사
+# }
+
+# HTTP에서 HTTPS로 리다이렉트 (Cloudflare를 사용하지 않는 경우)
+# Cloudflare를 사용하는 경우에는 필요 없음 (Cloudflare가 자동으로 처리)
+# server {
+#     listen 80;
+#     server_name leee.cloud www.leee.cloud;
+#     return 301 https://$server_name$request_uri;
+# }
+
+# 참고: Cloudflare SSL/TLS 모드 설정 방법
+# 1. Cloudflare Dashboard > SSL/TLS > Overview
+# 2. 모드 선택:
+#    - Flexible: Cloudflare ↔ 사용자(HTTPS), Cloudflare ↔ 원본서버(HTTP) - 포트 80만 필요
+#    - Full: Cloudflare ↔ 사용자(HTTPS), Cloudflare ↔ 원본서버(HTTPS) - 포트 443 필요, 인증서 필요
+#    - Full (strict): Full과 동일하지만 유효한 인증서 필수
+# 3. 현재 설정은 Flexible 모드에 맞춰져 있음 (포트 80 사용)
+

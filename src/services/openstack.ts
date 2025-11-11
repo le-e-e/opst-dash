@@ -30,8 +30,10 @@ const addProjectScopeParams = (service: 'nova' | 'neutron' | 'glance' | 'cinder'
         // all_tenants 파라미터가 일부 배포에서 400 오류를 발생시킬 수 있음
         return params;
       case 'glance':
-        // Glance는 기본적으로 모든 이미지를 표시하지만, 더 확실하게 하기 위해
-        return { ...params, visibility: 'all' };
+        // Glance는 관리자 권한으로 요청하면 기본적으로 모든 이미지를 반환
+        // visibility=all 파라미터는 일부 배포에서 300 리다이렉트 오류를 발생시킬 수 있음
+        // 따라서 파라미터 없이 기본 동작 사용
+        return params;
       case 'cinder':
         return { ...params, all_tenants: 'True' };
       default:
@@ -134,11 +136,42 @@ class BaseOpenStackService {
         url: `${endpoint}${path}`,
         headers,
         data,
-        params
+        params,
+        maxRedirects: 5, // 리다이렉트 자동 따라가기
+        validateStatus: (status) => {
+          // 200-399까지는 정상 응답으로 처리 (300 리다이렉트 포함)
+          // axios는 기본적으로 3xx를 에러로 처리하지 않지만, 명시적으로 허용
+          return status >= 200 && status < 400;
+        }
       });
+      
+      // 300 Multiple Choices 응답 처리
+      if (response.status === 300 && response.headers.location) {
+        console.warn(`HTTP 300 리다이렉트 응답: ${endpoint}${path} -> ${response.headers.location}`);
+        // Location 헤더의 URL로 재요청
+        const redirectUrl = response.headers.location.startsWith('http') 
+          ? response.headers.location 
+          : `${endpoint}${response.headers.location}`;
+        
+        const redirectResponse = await axios({
+          method: method === 'GET' ? 'GET' : 'GET', // 300은 보통 GET으로 리다이렉트
+          url: redirectUrl,
+          headers,
+          params,
+          maxRedirects: 5
+        });
+        return redirectResponse.data;
+      }
+      
       return response.data;
     } catch (error: any) {
-      // 로그 제거 - 오류는 상위에서 처리
+      // HTTP 300 응답에 대한 더 자세한 정보 로깅
+      if (error?.response?.status === 300) {
+        console.error(`HTTP 300 리다이렉트 오류: ${endpoint}${path}`, {
+          location: error.response?.headers?.location,
+          data: error.response?.data
+        });
+      }
       
       throw error;
     }
@@ -213,9 +246,54 @@ export class NovaService extends BaseOpenStackService {
   }
 
   async getVNCConsole(serverId: string) {
-    return this.makeRequest(OPENSTACK_ENDPOINTS.NOVA, `/servers/${serverId}/action`, 'POST', {
+    const response = await this.makeRequest(OPENSTACK_ENDPOINTS.NOVA, `/servers/${serverId}/action`, 'POST', {
       'os-getVNCConsole': { type: 'novnc' }
     });
+    
+    // Mixed Content 문제 해결: HTTP URL을 /novnc/ 프록시 경로로 변환
+    if (response.console?.url) {
+      // http://192.168.0.25:6080/vnc_lite.html?token=xxx -> /novnc/vnc_lite.html?path=websockify?token=xxx
+      let url = response.console.url.replace(/^https?:\/\/[^\/]+/, '/novnc');
+      
+      // noVNC가 WebSocket 경로를 올바르게 찾을 수 있도록 path 파라미터 설정
+      try {
+        const urlObj = new URL(url.startsWith('/') ? `https://leee.cloud${url}` : url);
+        const token = urlObj.searchParams.get('token');
+        const path = urlObj.searchParams.get('path');
+        
+        // token이 있으면 path 파라미터로 변환 (noVNC 형식: path=websockify?token=xxx - 상대 경로)
+        if (token) {
+          urlObj.searchParams.delete('token');
+          // 슬래시 없이 상대 경로로 설정하여 noVNC가 올바르게 해석하도록 함
+          urlObj.searchParams.set('path', `websockify?token=${token}`);
+        } else if (path) {
+          let normalizedPath = decodeURIComponent(path);
+          
+          // path가 '?token=xxx' 또는 'token=xxx' 형식이면 websockify 경로로 변환
+          if (/^\??token=/.test(normalizedPath)) {
+            normalizedPath = `websockify?${normalizedPath.replace(/^\?/, '')}`;
+          }
+          
+          // /websockify로 시작하면 슬래시 제거 (상대 경로로 변환)
+          if (normalizedPath.startsWith('/websockify')) {
+            normalizedPath = normalizedPath.substring(1);
+          }
+          
+          if (normalizedPath !== decodeURIComponent(path)) {
+            urlObj.searchParams.set('path', normalizedPath);
+          }
+        }
+
+        const searchParams = urlObj.searchParams.toString();
+        url = `${urlObj.pathname}${searchParams ? `?${searchParams}` : ''}`;
+      } catch (error) {
+        console.error('VNC URL 변환 오류:', error);
+      }
+      
+      response.console.url = url;
+    }
+    
+    return response;
   }
 
   async attachFloatingIP(serverId: string, address: string, fixedAddress?: string) {
@@ -344,10 +422,58 @@ export class NovaService extends BaseOpenStackService {
 
   // 인스턴스 메타데이터 업데이트
   async updateServerMetadata(serverId: string, metadata: { [key: string]: string }) {
-    const metadataData = {
-      metadata: metadata
-    };
-    return this.makeRequest(OPENSTACK_ENDPOINTS.NOVA, `/servers/${serverId}/metadata`, 'PUT', metadataData);
+    try {
+      // 먼저 기존 메타데이터를 읽어서 병합
+      const existingMetadataResponse = await this.makeRequest(
+        OPENSTACK_ENDPOINTS.NOVA, 
+        `/servers/${serverId}/metadata`, 
+        'GET'
+      );
+      
+      const existingMetadata = existingMetadataResponse?.metadata || {};
+      
+      // 기존 메타데이터와 새 메타데이터 병합
+      const mergedMetadata = {
+        ...existingMetadata,
+        ...metadata
+      };
+      
+      const metadataData = {
+        metadata: mergedMetadata
+      };
+      
+      return await this.makeRequest(
+        OPENSTACK_ENDPOINTS.NOVA, 
+        `/servers/${serverId}/metadata`, 
+        'PUT', 
+        metadataData
+      );
+    } catch (error: any) {
+      // GET 실패하거나 PUT 실패 시 개별 키 업데이트 방식으로 fallback
+      if (error?.response?.status === 404 || error?.response?.status === 409) {
+        console.log('메타데이터 PUT 실패, 개별 키 업데이트 방식으로 시도...');
+        
+        // 각 메타데이터 키를 개별적으로 업데이트
+        const results = [];
+        for (const [key, value] of Object.entries(metadata)) {
+          try {
+            await this.setServerMetadata(serverId, key, value);
+            results.push({ key, success: true });
+          } catch (setError) {
+            console.warn(`메타데이터 ${key} 설정 실패:`, setError);
+            results.push({ key, success: false, error: setError });
+          }
+        }
+        
+        // 일부라도 성공하면 성공으로 간주
+        const hasSuccess = results.some(r => r.success);
+        if (hasSuccess) {
+          return { success: true, results };
+        }
+      }
+      
+      throw error;
+    }
   }
 
   // 개별 메타데이터 항목 설정
@@ -530,12 +656,19 @@ export class CinderService extends BaseOpenStackService {
           return await this.makeRequest(endpoint, path, method, data, params);
         } catch (error: any) {
           lastError = error;
-          if (error?.response?.status !== 404 && error?.response?.status !== 400) {
+          const status = error?.response?.status;
+          // 404는 리소스가 없음을 의미 - 다음 시도 계속 (조용히 처리)
+          // 400도 일부 경우 정상일 수 있으므로 계속 시도
+          if (status !== 404 && status !== 400) {
+            // 404, 400이 아닌 다른 에러는 즉시 중단
             break;
           }
+          // 404나 400인 경우 조용히 다음 시도 계속 (로그 출력 안함)
         }
       }
     }
+    // 모든 시도 실패 시 마지막 에러 던지기
+    // 단, 404인 경우는 조용히 처리하기 위해 null 반환하지 않고 에러 던지기 (호출자가 처리)
     throw lastError;
   }
 
@@ -580,12 +713,20 @@ export class CinderService extends BaseOpenStackService {
     }
   }
 
-  async getVolume(volumeId: string) {
+  async getVolume(volumeId: string, silent404 = false) {
     const currentProjectId = this.getCurrentProjectId();
     const paths = currentProjectId
       ? [`/${currentProjectId}/volumes/${volumeId}`, `/volumes/${volumeId}`]
       : [`/volumes/${volumeId}`];
-    return this.tryMultipleCinderVersions(paths);
+    try {
+      return await this.tryMultipleCinderVersions(paths);
+    } catch (error: any) {
+      // silent404가 true이고 404 에러인 경우 조용히 처리
+      if (silent404 && error?.response?.status === 404) {
+        throw error; // 호출자가 처리하도록 에러 전달
+      }
+      throw error;
+    }
   }
 
   async createVolume(volumeData: any) {
@@ -700,7 +841,7 @@ export class CinderService extends BaseOpenStackService {
     const actionData = {
       'os-force_detach': {}
     };
-    return this.tryMultipleCinderVersions(['/volumes/${volumeId}/action'], 'POST', actionData);
+    return this.tryMultipleCinderVersions([`/volumes/${volumeId}/action`], 'POST', actionData);
   }
 
   // 볼륨 연결 정보 제거 (Cinder DB에서 강제로 attachment 정보 제거)
@@ -711,7 +852,7 @@ export class CinderService extends BaseOpenStackService {
         attach_status: 'detached'
       }
     };
-    return this.tryMultipleCinderVersions(['/volumes/${volumeId}/action'], 'POST', actionData);
+    return this.tryMultipleCinderVersions([`/volumes/${volumeId}/action`], 'POST', actionData);
   }
 
   // 단순 볼륨 상태 강제 변경 (관리자 권한)
@@ -721,7 +862,7 @@ export class CinderService extends BaseOpenStackService {
         status: status
       }
     };
-    return this.tryMultipleCinderVersions(['/volumes/${volumeId}/action'], 'POST', actionData);
+    return this.tryMultipleCinderVersions([`/volumes/${volumeId}/action`], 'POST', actionData);
   }
 
   // 모든 attachment 강제 해제
@@ -729,15 +870,21 @@ export class CinderService extends BaseOpenStackService {
     try {
       // 볼륨 정보 먼저 가져오기
       const volumeInfo = await this.getVolume(volumeId);
+      
+      // 볼륨이 없으면 (404) 이미 정리된 것으로 간주
+      if (!volumeInfo?.volume) {
+        return true;
+      }
+      
       const attachments = volumeInfo.volume?.attachments || [];
       
-      console.log(`볼륨 ${volumeId}의 연결 정보:`, attachments);
+      if (attachments.length === 0) {
+        return true; // 이미 분리됨
+      }
       
       // 각 attachment에 대해 강제 분리 시도
       for (const attachment of attachments) {
         try {
-          console.log(`Attachment ${attachment.id} 강제 해제 시도...`);
-          
           // Nova API를 통한 attachment 삭제 시도
           if (attachment.server_id) {
             await this.makeRequest(
@@ -746,15 +893,22 @@ export class CinderService extends BaseOpenStackService {
               'DELETE'
             );
           }
-        } catch (error) {
-          console.warn(`Attachment ${attachment.id} 삭제 실패:`, error);
+        } catch (error: any) {
+          // 400, 404는 이미 처리되었거나 존재하지 않는 것으로 무시
+          if (error?.response?.status !== 400 && error?.response?.status !== 404) {
+            // 다른 에러만 로그 (불필요한 에러 로그 최소화)
+          }
           // 실패해도 계속 진행
         }
       }
       
       return true;
-    } catch (error) {
-      console.error(`볼륨 ${volumeId} attachment 정리 실패:`, error);
+    } catch (error: any) {
+      // 404는 볼륨이 이미 삭제된 것으로 간주 - 성공으로 처리
+      if (error?.response?.status === 404) {
+        return true;
+      }
+      // 다른 에러는 무시 (불필요한 에러 로그 최소화)
       return false;
     }
   }
@@ -762,14 +916,23 @@ export class CinderService extends BaseOpenStackService {
   // 볼륨 상태 확인
   async checkVolumeStatus(volumeId: string) {
     try {
-      const response = await this.getVolume(volumeId);
+      // silent404=true로 설정하여 404를 조용히 처리
+      const response = await this.getVolume(volumeId, true);
       return {
         status: response.volume?.status,
         attach_status: response.volume?.attach_status,
         attachments: response.volume?.attachments || []
       };
-    } catch (error) {
-      console.error(`볼륨 ${volumeId} 상태 확인 실패:`, error);
+    } catch (error: any) {
+      // 404는 볼륨이 이미 삭제되었거나 존재하지 않음을 의미 - 정상적인 경우일 수 있음
+      // 조용히 처리 (로그 출력 안함)
+      if (error?.response?.status === 404) {
+        return null; // 볼륨 없음
+      }
+      // 404가 아닌 다른 에러만 로그 출력
+      if (error?.response?.status !== 404) {
+        console.error(`볼륨 ${volumeId} 상태 확인 실패:`, error.message);
+      }
       return null;
     }
   }
@@ -1013,8 +1176,11 @@ export class CinderService extends BaseOpenStackService {
       } catch (waitError) {
         console.log(`   ⚠️ 2단계 실패: 강제 분리 대기 타임아웃`);
       }
-    } catch (forceDetachError) {
-      console.log(`   ⚠️ 2단계 실패: Cinder API 강제 분리 오류`);
+    } catch (forceDetachError: any) {
+      // 404는 볼륨이 이미 존재하지 않는 것으로 간주 - 무시
+      if (forceDetachError?.response?.status !== 404) {
+        console.log(`   ⚠️ 2단계 실패: Cinder API 강제 분리 오류`);
+      }
     }
     
     // 3단계: 모든 attachment 개별 정리
@@ -1043,8 +1209,11 @@ export class CinderService extends BaseOpenStackService {
         console.log(`   ✅ 4단계 성공: ${volName} 상태 리셋 완료`);
         return true;
       }
-    } catch (resetError) {
-      console.log(`   ❌ 4단계 실패: 상태 리셋 오류`);
+    } catch (resetError: any) {
+      // 404는 볼륨이 이미 존재하지 않는 것으로 간주 - 무시
+      if (resetError?.response?.status !== 404) {
+        console.log(`   ❌ 4단계 실패: 상태 리셋 오류`);
+      }
     }
     
     console.log(`   ❌ ${volName} 모든 분리 시도 실패`);
@@ -1085,7 +1254,9 @@ export class CinderService extends BaseOpenStackService {
     // 1. 현재 상태 확인
     const status = await this.checkVolumeStatus(volumeId);
     if (!status) {
-      throw new Error(`볼륨 ${volName} 상태를 확인할 수 없습니다.`);
+      // 404 에러인 경우 볼륨이 이미 삭제된 것으로 간주 - 성공으로 처리
+      console.log(`   ✅ ${volName} 이미 삭제된 것으로 확인됨`);
+      return;
     }
     
     console.log(`   상태: ${status.status}, 연결 수: ${status.attachments.length}`);

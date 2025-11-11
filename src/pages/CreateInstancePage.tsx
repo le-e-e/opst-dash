@@ -19,6 +19,7 @@ import {
   Globe
 } from 'lucide-react';
 import { novaService, neutronService, glanceService, cinderService } from '../services/openstack';
+import { cloudflareService } from '../services/cloudflare';
 import { 
   filterImagesByProject
 } from '../utils/projectScope';
@@ -45,6 +46,7 @@ interface CreateInstanceForm {
   volume_type?: string;
   delete_on_termination: boolean;
   auto_assign_floating_ip: boolean;
+  enable_cloudflare_tunnel: boolean;
 }
 
 interface Image {
@@ -114,7 +116,8 @@ const CreateInstancePage: React.FC = () => {
       volume_source: 'image',
       delete_on_termination: true,
       availability_zone: 'nova',
-      auto_assign_floating_ip: false
+      auto_assign_floating_ip: false,
+      enable_cloudflare_tunnel: false
     }
   });
 
@@ -533,8 +536,7 @@ const CreateInstancePage: React.FC = () => {
 
           ...(data.key_name && { key_name: data.key_name }),
           availability_zone: 'nova',
-          ...(data.user_data && { user_data: btoa(data.user_data) }), // base64 encoding
-          ...(Object.keys(data.metadata).length > 0 || data.description || data.boot_source === 'volume' ? { 
+          ...(Object.keys(data.metadata).length > 0 || data.description || data.boot_source === 'volume' || data.enable_cloudflare_tunnel ? { 
             metadata: {
               ...data.metadata,
               ...(data.description && { description: data.description }),
@@ -550,6 +552,55 @@ const CreateInstancePage: React.FC = () => {
         }
       };
 
+      // Cloudflare Tunnel 설정 (인스턴스 생성 전에 설정)
+      let tunnelInfo: { domain: string; tunnelId: string; cloudInitScript: string } | null = null;
+      let userData = data.user_data || '';
+      
+      if (data.enable_cloudflare_tunnel) {
+        try {
+          toast.loading('Cloudflare Tunnel 설정 중...', { id: 'cloudflare-tunnel' });
+          tunnelInfo = await cloudflareService.setupSSHTunnel(data.name);
+          
+          // user_data에 Cloudflare Tunnel 스크립트 추가
+          userData = userData 
+            ? `${userData}\n\n# Cloudflare Tunnel 설정\n${tunnelInfo.cloudInitScript}`
+            : tunnelInfo.cloudInitScript;
+          
+          toast.success(`Cloudflare Tunnel 설정 완료: ${tunnelInfo.domain}`, { id: 'cloudflare-tunnel' });
+        } catch (error: any) {
+          console.error('Cloudflare Tunnel 설정 실패:', error);
+          toast.error(`Cloudflare Tunnel 설정 실패: ${error.message}\n인스턴스는 생성되지만 Tunnel은 설정되지 않습니다.`, { 
+            id: 'cloudflare-tunnel',
+            duration: 8000
+          });
+          // Tunnel 설정 실패해도 인스턴스 생성은 계속 진행
+        }
+      }
+
+      // user_data가 있으면 추가
+      if (userData) {
+        // UTF-8 문자열을 base64로 인코딩 (한글 등 유니코드 문자 처리)
+        const utf8ToBase64 = (str: string): string => {
+          try {
+            // 방법 1: TextEncoder 사용 (모던 브라우저)
+            const encoder = new TextEncoder();
+            const bytes = encoder.encode(str);
+            // 큰 배열을 처리하기 위해 청크 단위로 처리
+            let binary = '';
+            const chunkSize = 8192;
+            for (let i = 0; i < bytes.length; i += chunkSize) {
+              const chunk = bytes.slice(i, i + chunkSize);
+              binary += String.fromCharCode(...chunk);
+            }
+            return btoa(binary);
+          } catch (e) {
+            // 방법 2: fallback (구형 브라우저 또는 에러 시)
+            return btoa(unescape(encodeURIComponent(str)));
+          }
+        };
+        serverData.server.user_data = utf8ToBase64(userData);
+      }
+
       console.log('==== 인스턴스 생성 요청 ====');
       console.log('요청 데이터:', JSON.stringify(serverData, null, 2));
       
@@ -557,6 +608,176 @@ const CreateInstancePage: React.FC = () => {
       
       console.log('==== 인스턴스 생성 응답 ====');
       console.log('응답 데이터:', response);
+      
+      const instanceId = response.server?.id || response.id;
+      
+      // 인스턴스 생성 직후 상태 확인 (짧은 대기 후)
+      if (instanceId) {
+        setTimeout(async () => {
+          try {
+            const serverDetail = await novaService.getServer(instanceId);
+            const server = serverDetail.server;
+            
+            console.log('==== 인스턴스 생성 후 상태 확인 ====');
+            console.log('인스턴스 상태:', server.status);
+            console.log('인스턴스 정보:', server);
+            
+            if (server.status === 'ERROR') {
+              const faultMessage = server.fault?.message || '알 수 없는 오류';
+              const faultCode = server.fault?.code || 'N/A';
+              
+              console.error('==== 인스턴스 생성 실패 상세 정보 ====');
+              console.error('오류 코드:', faultCode);
+              console.error('오류 메시지:', faultMessage);
+              console.error('전체 Fault 정보:', JSON.stringify(server.fault, null, 2));
+              
+              // "No valid host was found" 에러에 대한 상세 안내
+              let errorGuidance = '';
+              if (faultMessage.includes('No valid host')) {
+                errorGuidance = 
+                  `\n\n가능한 원인:\n` +
+                  `• 컴퓨트 노드의 리소스 부족 (CPU, RAM, 디스크)\n` +
+                  `• 컴퓨트 노드가 사용 불가능한 상태\n` +
+                  `• 선택한 플레이버가 너무 크거나 사용 불가능\n` +
+                  `• 가용 영역(Availability Zone) 문제\n\n` +
+                  `해결 방법:\n` +
+                  `• 더 작은 플레이버를 선택해보세요\n` +
+                  `• 다른 가용 영역을 선택해보세요\n` +
+                  `• OpenStack 관리자에게 컴퓨트 노드 상태를 확인 요청하세요`;
+              }
+              
+              toast.error(
+                `인스턴스 생성 실패\n\n` +
+                `오류 코드: ${faultCode}\n` +
+                `오류 메시지: ${faultMessage}` +
+                errorGuidance,
+                { duration: 15000 }
+              );
+            } else if (server.status === 'ACTIVE') {
+              console.log('인스턴스가 성공적으로 생성되었습니다.');
+            }
+          } catch (checkError: any) {
+            // 404는 인스턴스가 삭제되었음을 의미 - 조용히 처리
+            if (checkError?.response?.status === 404) {
+              console.log('인스턴스가 삭제되었거나 존재하지 않습니다.');
+              return;
+            }
+            console.error('인스턴스 상태 확인 실패:', checkError);
+          }
+        }, 3000); // 3초 후 확인
+      }
+      
+      // Cloudflare Tunnel 정보 표시
+      if (tunnelInfo) {
+        const instanceId = response.server?.id || response.id;
+        toast.success(
+          `인스턴스 생성 완료!\nSSH 접속: ssh user@${tunnelInfo.domain}`,
+          { duration: 10000 }
+        );
+        
+        // 메타데이터에 Tunnel 정보 저장 (인스턴스가 ACTIVE 상태가 될 때까지 대기)
+        if (instanceId) {
+          // 백그라운드에서 인스턴스가 ACTIVE 상태가 될 때까지 대기 후 메타데이터 저장
+          setTimeout(async () => {
+            let attempts = 0;
+            const maxAttempts = 30; // 최대 90초 대기 (3초씩 30번)
+            let metadataSaved = false;
+            
+            while (attempts < maxAttempts && !metadataSaved) {
+              try {
+                await new Promise(resolve => setTimeout(resolve, 3000)); // 3초 대기
+                attempts++;
+                
+                // 인스턴스 상태 확인
+                let instanceDetail;
+                try {
+                  instanceDetail = await novaService.getServer(instanceId);
+                } catch (getError: any) {
+                  // 404 에러는 인스턴스가 삭제되었거나 존재하지 않음을 의미
+                  if (getError?.response?.status === 404) {
+                    console.log(`[메타데이터 저장] 인스턴스가 삭제되었습니다. 메타데이터 저장을 중단합니다.`);
+                    metadataSaved = true; // 강제 종료를 위해 설정하여 루프 종료
+                    break;
+                  }
+                  // 다른 에러는 재시도
+                  throw getError;
+                }
+                
+                const server = instanceDetail.server;
+                
+                console.log(`[메타데이터 저장] 시도 ${attempts}: 인스턴스 상태=${server.status}`);
+                
+                // ERROR 상태면 중단
+                if (server.status === 'ERROR') {
+                  console.error('인스턴스가 ERROR 상태입니다. 메타데이터 저장을 중단합니다.');
+                  break;
+                }
+                
+                // ACTIVE 상태가 아니면 계속 대기
+                if (server.status !== 'ACTIVE') {
+                  continue;
+                }
+                
+                // ACTIVE 상태가 되면 메타데이터 저장 시도
+                try {
+                  await novaService.updateServerMetadata(instanceId, {
+                    cloudflare_tunnel_domain: tunnelInfo.domain,
+                    cloudflare_tunnel_id: tunnelInfo.tunnelId
+                  });
+                  console.log('✅ Cloudflare Tunnel 메타데이터 저장 성공:', tunnelInfo.domain);
+                  metadataSaved = true;
+                  break;
+                } catch (updateError: any) {
+                  // 409 Conflict는 아직 메타데이터 설정이 불가능한 상태일 수 있음
+                  if (updateError?.response?.status === 409) {
+                    console.log(`[메타데이터 저장] 409 Conflict 발생, 재시도 대기... (시도 ${attempts}/${maxAttempts})`);
+                    // 계속 대기
+                    continue;
+                  }
+                  
+                  // 다른 에러면 개별 키 업데이트 방식으로 시도
+                  try {
+                    await novaService.setServerMetadata(instanceId, 'cloudflare_tunnel_domain', tunnelInfo.domain);
+                    await novaService.setServerMetadata(instanceId, 'cloudflare_tunnel_id', tunnelInfo.tunnelId);
+                    console.log('✅ 메타데이터 개별 키 업데이트 성공');
+                    metadataSaved = true;
+                    break;
+                  } catch (setError: any) {
+                    if (setError?.response?.status === 409) {
+                      console.log(`[메타데이터 저장] 개별 키 409 Conflict, 재시도 대기... (시도 ${attempts}/${maxAttempts})`);
+                      continue;
+                    }
+                    throw setError;
+                  }
+                }
+              } catch (error: any) {
+                // 404는 인스턴스가 삭제되었음을 의미 - 조용히 처리하고 종료
+                if (error?.response?.status === 404) {
+                  console.log('[메타데이터 저장] 인스턴스가 삭제되었습니다. 메타데이터 저장을 중단합니다.');
+                  break;
+                }
+                
+                console.error(`[메타데이터 저장] 시도 ${attempts} 실패:`, error.message);
+                
+                // 최대 시도 횟수 도달 시 사용자에게 알림
+                if (attempts >= maxAttempts) {
+                  console.error('❌ 메타데이터 저장 최종 실패 (최대 시도 횟수 도달)');
+                  toast.error(
+                    'Cloudflare Tunnel은 설정되었지만 메타데이터 저장에 실패했습니다. ' +
+                    '인스턴스가 완전히 시작된 후 상세보기에서 새로고침하거나 수동으로 확인해주세요.',
+                    { duration: 6000 }
+                  );
+                  break;
+                }
+              }
+            }
+            
+            if (!metadataSaved && attempts >= maxAttempts) {
+              console.error('❌ 메타데이터 저장 시간 초과');
+            }
+          }, 5000); // 5초 후 시작 (인스턴스 생성 직후는 BUILD 상태일 가능성이 높음)
+        }
+      }
       
       // 볼륨 이름 설정 (새 볼륨 생성인 경우)
       if ((data.boot_source === 'volume' && data.volume_source === 'image') ||
@@ -570,28 +791,77 @@ const CreateInstancePage: React.FC = () => {
           try {
             console.log('🏷️ 볼륨 이름 설정 프로세스 시작...');
             
-            // 인스턴스와 볼륨이 생성될 때까지 대기
+            // 인스턴스가 ACTIVE 상태가 되고 볼륨이 연결될 때까지 대기
             let attempts = 0;
-            const maxAttempts = 30; // 최대 90초 대기
+            const maxAttempts = 60; // 최대 3분 대기 (볼륨 생성에 더 많은 시간 허용)
             let attachedVolumes: any[] = [];
+            let instanceActive = false;
             
             while (attempts < maxAttempts) {
               await new Promise(resolve => setTimeout(resolve, 3000)); // 3초 대기
               attempts++;
               
               try {
-                const instanceDetail = await novaService.getServer(response.server.id);
-                attachedVolumes = instanceDetail.server.volumes_attached || [];
+                let instanceDetail;
+                try {
+                  instanceDetail = await novaService.getServer(response.server.id);
+                } catch (getError: any) {
+                  // 404는 인스턴스가 삭제되었음을 의미 - 조용히 처리
+                  if (getError?.response?.status === 404) {
+                    console.log(`인스턴스가 삭제되었습니다. 볼륨 이름 설정을 중단합니다.`);
+                    break;
+                  }
+                  throw getError;
+                }
                 
-                console.log(`🔍 시도 ${attempts}: 연결된 볼륨 개수 ${attachedVolumes.length}`);
+                const server = instanceDetail.server;
                 
-                if (attachedVolumes.length > 0) {
-                  // 볼륨이 연결되었으므로 이름 설정 시도
+                console.log(`🔍 시도 ${attempts}: 인스턴스 상태=${server.status}, 볼륨 개수=${(server.volumes_attached || []).length}`);
+                
+                // 인스턴스가 ACTIVE 상태인지 확인
+                if (server.status === 'ACTIVE') {
+                  instanceActive = true;
+                } else if (server.status === 'ERROR') {
+                  console.error('인스턴스가 ERROR 상태입니다. 볼륨 이름 설정을 중단합니다.');
                   break;
+                }
+                
+                attachedVolumes = server.volumes_attached || [];
+                
+                // 인스턴스가 ACTIVE이고 볼륨이 연결되었으면 진행
+                if (instanceActive && attachedVolumes.length > 0) {
+                  console.log('✅ 인스턴스가 ACTIVE이고 볼륨이 연결되었습니다.');
+                  break;
+                }
+                
+                // Cinder API에서도 볼륨 확인 (Nova API가 늦게 업데이트될 수 있음)
+                if (instanceActive) {
+                  try {
+                    const allVolumes = await cinderService.getVolumes();
+                    const instanceVolumes = (allVolumes.volumes || []).filter((vol: any) => {
+                      return vol.attachments && vol.attachments.some((att: any) => att.server_id === response.server.id);
+                    });
+                    
+                    if (instanceVolumes.length > 0 && attachedVolumes.length === 0) {
+                      console.log(`🔍 Cinder API에서 ${instanceVolumes.length}개 볼륨 발견 (Nova는 아직 업데이트 안됨)`);
+                      // Cinder에서 찾은 볼륨 정보로 attachedVolumes 업데이트
+                      attachedVolumes = instanceVolumes.map((vol: any) => ({
+                        id: vol.id,
+                        device: vol.attachments[0]?.device || 'unknown'
+                      }));
+                      break;
+                    }
+                  } catch (cinderError) {
+                    console.log('Cinder API 확인 실패 (계속 시도)');
+                  }
                 }
               } catch (error) {
                 console.log(`🔍 시도 ${attempts}: 인스턴스 정보 가져오기 실패`);
               }
+            }
+            
+            if (!instanceActive) {
+              console.warn('⚠️ 인스턴스가 ACTIVE 상태가 되지 않았습니다. 볼륨 이름 설정을 건너뜁니다.');
             }
             
             if (attachedVolumes.length > 0) {
@@ -765,7 +1035,18 @@ const CreateInstancePage: React.FC = () => {
               await new Promise(resolve => setTimeout(resolve, 10000)); // 10초 대기
               
               try {
-                const serverStatus = await novaService.getServer(response.server.id);
+                let serverStatus;
+                try {
+                  serverStatus = await novaService.getServer(response.server.id);
+                } catch (getError: any) {
+                  // 404는 인스턴스가 삭제되었음을 의미 - 조용히 처리
+                  if (getError?.response?.status === 404) {
+                    console.log('인스턴스가 삭제되었습니다. 유동 IP 할당을 중단합니다.');
+                    break;
+                  }
+                  throw getError;
+                }
+                
                 console.log(`인스턴스 상태: ${serverStatus.server.status} (시도: ${attempts + 1}/${maxAttempts})`);
                 
                 if (serverStatus.server.status === 'ACTIVE') {
@@ -820,11 +1101,50 @@ const CreateInstancePage: React.FC = () => {
                   break;
                 } else if (serverStatus.server.status === 'ERROR') {
                   console.error('인스턴스가 오류 상태입니다.');
-                  toast.error('인스턴스가 오류 상태로 인해 유동 IP를 할당할 수 없습니다.');
+                  
+                  // ERROR 상태의 상세 정보 로깅
+                  const fault = serverStatus.server.fault;
+                  if (fault) {
+                    console.error('==== 인스턴스 오류 상세 정보 ====');
+                    console.error('오류 코드:', fault.code);
+                    console.error('오류 메시지:', fault.message);
+                    console.error('전체 Fault 정보:', JSON.stringify(fault, null, 2));
+                    
+                    const faultMessage = fault.message || '알 수 없는 오류';
+                    const faultCode = fault.code || 'N/A';
+                    
+                    // "No valid host was found" 에러에 대한 상세 안내
+                    let errorGuidance = '';
+                    if (faultMessage.includes('No valid host')) {
+                      errorGuidance = 
+                        `\n\n가능한 원인:\n` +
+                        `• 컴퓨트 노드의 리소스 부족 (CPU, RAM, 디스크)\n` +
+                        `• 컴퓨트 노드가 사용 불가능한 상태\n` +
+                        `• 선택한 플레이버가 너무 크거나 사용 불가능\n` +
+                        `• 가용 영역(Availability Zone) 문제\n\n` +
+                        `해결 방법:\n` +
+                        `• 더 작은 플레이버를 선택해보세요\n` +
+                        `• 다른 가용 영역을 선택해보세요\n` +
+                        `• OpenStack 관리자에게 컴퓨트 노드 상태를 확인 요청하세요`;
+                    }
+                    
+                    toast.error(
+                      `인스턴스 생성 실패\n\n` +
+                      `오류 코드: ${faultCode}\n` +
+                      `오류 메시지: ${faultMessage}` +
+                      errorGuidance,
+                      { duration: 15000 }
+                    );
+                  } else {
+                    toast.error('인스턴스가 오류 상태로 인해 유동 IP를 할당할 수 없습니다.');
+                  }
                   break;
                 }
-              } catch (checkError) {
-                console.error('인스턴스 상태 확인 실패:', checkError);
+              } catch (checkError: any) {
+                // 404는 이미 위에서 처리됨
+                if (checkError?.response?.status !== 404) {
+                  console.error('인스턴스 상태 확인 실패:', checkError);
+                }
               }
               
               attempts++;
@@ -1579,11 +1899,52 @@ const CreateInstancePage: React.FC = () => {
                         className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 dark:bg-gray-700"
                       />
                       <div className="ml-3">
-                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">유동 IP 자동 할당</span>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">
-                          인스턴스 생성 후 자동으로 유동 IP를 할당하고 연결합니다. 
-                          외부에서 인스턴스에 접근하려면 이 옵션을 활성화하세요.
+                        <span className="text-sm font-medium text-gray-900 dark:text-gray-100">Floating IP 자동 할당</span>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          인스턴스에 외부 접근 가능한 Floating IP를 자동으로 할당합니다
                         </p>
+                      </div>
+                    </label>
+                  )}
+                />
+              </div>
+              
+              {/* Cloudflare Tunnel 자동 설정 */}
+              <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-600">
+                <Controller
+                  name="enable_cloudflare_tunnel"
+                  control={control}
+                  render={({ field }) => (
+                    <label className="flex items-start">
+                      <input
+                        type="checkbox"
+                        checked={field.value}
+                        onChange={field.onChange}
+                        className="mt-1 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 dark:bg-gray-700"
+                      />
+                      <div className="ml-3 flex-1">
+                        <div className="flex items-center">
+                          <Globe className="h-5 w-5 text-blue-600 dark:text-blue-400 mr-2" />
+                          <span className="text-sm font-medium text-gray-900 dark:text-gray-100">Cloudflare Tunnel 자동 설정</span>
+                        </div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          인스턴스 부팅 시 Cloudflare Tunnel을 자동으로 설정하여 외부에서 SSH 접속이 가능한 도메인을 생성합니다
+                        </p>
+                        {field.value && (
+                          <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                            <p className="text-xs text-blue-800 dark:text-blue-200">
+                              <strong>예상 도메인:</strong> ssh-{watch('name')?.toLowerCase().replace(/[^a-z0-9-]/g, '-') || 'instance'}.{import.meta.env.VITE_CLOUDFLARE_DOMAIN || 'leee.cloud'}
+                            </p>
+                            <p className="text-xs text-blue-700 dark:text-blue-300 mt-1">
+                              SSH 접속: <code className="bg-blue-100 dark:bg-blue-900/50 px-1 rounded">ssh user@{watch('name')?.toLowerCase().replace(/[^a-z0-9-]/g, '-') || 'instance'}.{import.meta.env.VITE_CLOUDFLARE_DOMAIN || 'leee.cloud'}</code>
+                            </p>
+                            <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+                              • cloudflared가 자동으로 설치되고 systemd 서비스로 등록됩니다<br/>
+                              • 인스턴스 부팅 후 약 1-2분 내 SSH 접속이 가능합니다<br/>
+                              • Floating IP 없이도 어디서나 도메인으로 접속할 수 있습니다
+                            </p>
+                          </div>
+                        )}
                       </div>
                     </label>
                   )}
@@ -1862,6 +2223,22 @@ echo '<h1>Hello from OpenStack!</h1>' > /var/www/html/index.html`}
                           {watch('auto_assign_floating_ip') ? '예 (외부 접근 가능)' : '아니오 (내부 네트워크만)'}
                         </span>
                       </div>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-sm font-medium text-gray-500 dark:text-gray-400">Cloudflare Tunnel</dt>
+                    <dd className="text-sm text-gray-900 dark:text-gray-100">
+                      <div className="flex items-center space-x-2">
+                        <Globe className="h-4 w-4 text-blue-500" />
+                        <span className={watch('enable_cloudflare_tunnel') ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}>
+                          {watch('enable_cloudflare_tunnel') ? '예 (자동 도메인 생성)' : '아니오'}
+                        </span>
+                      </div>
+                      {watch('enable_cloudflare_tunnel') && (
+                        <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                          ssh-{watch('name')?.toLowerCase().replace(/[^a-z0-9-]/g, '-') || 'instance'}.{import.meta.env.VITE_CLOUDFLARE_DOMAIN || 'leee.cloud'}
+                        </p>
+                      )}
                     </dd>
                   </div>
                 </dl>

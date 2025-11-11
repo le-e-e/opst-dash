@@ -25,9 +25,14 @@ import {
   Database,
   Unlink,
   Link,
-  Plus
+  Plus,
+  Terminal,
+  Copy,
+  Check,
+  AlertCircle
 } from 'lucide-react';
 import { novaService, neutronService, cinderService, glanceService } from '../services/openstack';
+import { cloudflareService } from '../services/cloudflare';
 import toast from 'react-hot-toast';
 
 interface InstanceDetail {
@@ -75,9 +80,11 @@ const InstanceDetailPage: React.FC = () => {
   const [networks, setNetworks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'network' | 'storage' | 'security' | 'console' | 'logs'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'network' | 'storage' | 'security' | 'console' | 'logs' | 'connect'>('overview');
+  const [connectSubTab, setConnectSubTab] = useState<'quick' | 'windows' | 'macos' | 'putty' | 'troubleshoot'>('quick');
   const [consoleUrl, setConsoleUrl] = useState<string | null>(null);
   const [consoleLogs, setConsoleLogs] = useState<string>('');
+  const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
 
   const fetchInstanceDetail = async () => {
     if (!instanceId) return;
@@ -142,7 +149,24 @@ const InstanceDetailPage: React.FC = () => {
     
     try {
       const response = await novaService.getVNCConsole(instanceId);
-      setConsoleUrl(response.console.url);
+      let url = response.console.url;
+      
+      // WebSocket 경로가 올바르게 설정되도록 보장
+      // noVNC가 현재 페이지의 호스트를 사용하므로, 상대 경로로 변환
+      if (url && url.startsWith('/novnc/')) {
+        // path 파라미터에 websockify 경로 포함 확인
+        const urlObj = new URL(url.startsWith('/') ? `https://leee.cloud${url}` : url);
+        const path = urlObj.searchParams.get('path');
+        if (path && path.includes('token=')) {
+          // path가 이미 token을 포함하고 있으면 그대로 사용
+          // WebSocket 연결은 noVNC HTML 내부에서 자동 처리됨
+        }
+        // noVNC HTML은 자동으로 WebSocket URL을 생성하지만,
+        // 올바른 경로를 사용하도록 보장하기 위해 상대 경로 사용
+        url = url.replace(/^\/novnc\//, '/novnc/');
+      }
+      
+      setConsoleUrl(url);
       setActiveTab('console');
     } catch (error) {
       console.error('VNC 콘솔 열기 실패:', error);
@@ -239,6 +263,13 @@ const InstanceDetailPage: React.FC = () => {
   const handleDeleteWithVolumes = async () => {
     if (!instanceId || !instance) return;
     
+    // 간단한 확인만
+    if (!confirm(`인스턴스 "${instance.name}"을(를) 삭제하시겠습니까?\n\n연결된 볼륨과 Cloudflare 터널도 함께 삭제됩니다.`)) return;
+    
+    // 바로 목록 페이지로 이동
+    toast.loading(`${instance.name} 삭제 중...`, { id: 'delete-instance', duration: Infinity });
+    navigate('/compute');
+    
     try {
       // 연결된 볼륨 확인
       const attachedVolumes = instance.volumes_attached || [];
@@ -252,17 +283,12 @@ const InstanceDetailPage: React.FC = () => {
         };
       });
 
-      console.log(`🔍 Nova API volumes_attached: ${attachedVolumes.length}개`);
-      
-      // 추가로 Cinder API에서 해당 인스턴스에 연결된 볼륨 찾기
+      // Cinder API에서 추가 볼륨 확인
       try {
         const cinderConnectedVolumes = volumes.filter((vol: any) => {
           return vol.attachments && vol.attachments.some((att: any) => att.server_id === instanceId);
         });
         
-        console.log(`🔍 Cinder API에서 발견된 연결 볼륨: ${cinderConnectedVolumes.length}개`);
-        
-        // Nova에서 놓친 볼륨이 있는지 확인하고 추가
         cinderConnectedVolumes.forEach((cinderVol: any) => {
           const alreadyExists = volumesToCheck.some(vol => vol.id === cinderVol.id);
           if (!alreadyExists) {
@@ -273,11 +299,9 @@ const InstanceDetailPage: React.FC = () => {
               size: cinderVol.size || 0,
               device: attachment?.device || 'unknown'
             });
-            console.log(`✅ Nova에서 놓친 볼륨 발견: ${cinderVol.name || cinderVol.id}`);
           }
         });
         
-        // 기존 볼륨 정보 보강
         volumesToCheck = volumesToCheck.map((vol: any) => {
           const cinderVolume = volumes.find((v: any) => v.id === vol.id);
           if (cinderVolume) {
@@ -289,138 +313,62 @@ const InstanceDetailPage: React.FC = () => {
           }
           return vol;
         });
-        
-        console.log(`🔍 최종 확인된 연결 볼륨: ${volumesToCheck.length}개`);
-        
       } catch (cinderError) {
-        console.log('🔍 Cinder API 볼륨 확인 실패, Nova API 정보만 사용');
+        console.log('Cinder API 볼륨 확인 실패, Nova API 정보만 사용');
       }
 
-      // 볼륨 삭제 정책 결정 (delete_on_termination 기반)
-      let deleteVolumes = false;
-      let autoDeleteVolumes: any[] = [];
-      let keepVolumes: any[] = [];
+      // 모든 볼륨 자동 삭제로 설정
+      const deleteVolumes = volumesToCheck.length > 0;
       
+      // 볼륨 분리 (빠르게 시도만, 실패해도 계속 진행)
       if (volumesToCheck.length > 0) {
-        // 볼륨별로 delete_on_termination 설정 확인
-        for (const vol of volumesToCheck) {
-          try {
-            // 인스턴스의 볼륨 연결 정보에서 delete_on_termination 확인
-            const attachmentInfo = (instance as any)['os-extended-volumes:volumes_attached']?.find((av: any) => av.id === vol.id);
-            const metadataDeleteFlag = instance.metadata?.volume_delete_on_termination === 'true' ||
-                                     instance.metadata?.[`volume_${vol.id}_delete_on_termination`] === 'true';
-            const shouldDelete = attachmentInfo?.delete_on_termination || 
-                               attachmentInfo?.['delete_on_termination'] ||
-                               metadataDeleteFlag;
-            
-            if (shouldDelete) {
-              autoDeleteVolumes.push(vol);
-            } else {
-              keepVolumes.push(vol);
-            }
-          } catch (error) {
-            // 정보를 알 수 없는 경우 보존하는 것이 안전
-            keepVolumes.push(vol);
-          }
-        }
-        
-        // 사용자에게 볼륨 삭제 여부 직접 확인
-        let confirmMessage = `인스턴스 "${instance.name}" 삭제:\n\n`;
-        confirmMessage += `📀 연결된 볼륨 (${volumesToCheck.length}개):\n`;
-        confirmMessage += volumesToCheck.map((v: any) => {
-          return `  - ${v.name} (${v.size}GB, ${v.device})`;
-        }).join('\n') + '\n\n';
-        confirmMessage += `⚠️ 볼륨도 함께 삭제하시겠습니까?\n\n`;
-        confirmMessage += `- "확인": 인스턴스와 모든 볼륨 삭제\n`;
-        confirmMessage += `- "취소": 인스턴스만 삭제, 볼륨은 보존`;
-        
-        const deleteVolumesToo = confirm(confirmMessage);
-        
-        if (deleteVolumesToo) {
-          deleteVolumes = true;
-          console.log(`✅ 사용자 선택: 인스턴스와 ${volumesToCheck.length}개 볼륨 모두 삭제`);
-        } else {
-          console.log(`✅ 사용자 선택: 인스턴스만 삭제, ${volumesToCheck.length}개 볼륨 보존`);
-        }
-      } else {
-        if (!confirm(`정말로 인스턴스 "${instance.name}"을(를) 삭제하시겠습니까?`)) return;
-      }
-      
-      // 강력한 볼륨 분리 로직
-      if (volumesToCheck.length > 0) {
-        console.log('===== 강화된 볼륨 분리 시작 =====');
-        
-        let successfulDetachments = 0;
-        for (const vol of volumesToCheck) {
-          console.log(`\n볼륨 ${vol.name} (${vol.id}) 분리 시작...`);
-          
-          try {
-            const success = await cinderService.safeDetachVolume(instanceId, vol.id, vol.name);
-            if (success) {
-              successfulDetachments++;
-              console.log(`✅ ${vol.name} 분리 성공`);
-            } else {
-              console.log(`⚠️ ${vol.name} 분리 실패 (계속 진행)`);
-            }
-          } catch (detachError) {
-            console.error(`❌ ${vol.name} 분리 오류:`, detachError);
-          }
-        }
-        
-        console.log(`\n📊 볼륨 분리 결과: ${successfulDetachments}/${volumesToCheck.length}개 성공`);
-        console.log('===== 모든 볼륨 분리 시도 완료 =====\n');
-        
-        // 추가 안정화 대기
-        console.log('인스턴스 삭제 전 안정화 대기...');
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        await Promise.allSettled(
+          volumesToCheck.map(vol => 
+            cinderService.safeDetachVolume(instanceId, vol.id, vol.name)
+              .catch(() => console.log(`볼륨 ${vol.name} 분리 실패, 강제 삭제 진행`))
+          )
+        );
+        // 짧은 안정화 대기
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
       
       // 인스턴스 삭제
-      console.log('인스턴스 삭제 시작...');
       await novaService.deleteServer(instanceId);
-      console.log('인스턴스 삭제 요청 완료');
       
-      // 인스턴스 완전 삭제 대기
-      const instanceDeleted = await cinderService.waitForInstanceDeleted(instanceId, 60);
-      if (!instanceDeleted) {
-        console.log('⚠️ 인스턴스 삭제 확인 타임아웃, 볼륨 삭제 계속 진행');
-      }
+      // 짧은 삭제 대기 (백그라운드에서 완료됨)
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
-      // 볼륨 삭제 (사용자가 선택한 경우)
+      // 볼륨 삭제
       if (deleteVolumes && volumesToCheck.length > 0) {
-        console.log('볼륨 삭제 시작...');
-        toast.loading('볼륨을 삭제하는 중...', { id: 'delete-volumes' });
-        
-        let successfulDeletions = 0;
-        let failedDeletions = 0;
-        
         for (const vol of volumesToCheck) {
           try {
-            console.log(`볼륨 ${vol.name} 삭제 시도...`);
             await cinderService.safeDeleteVolume(vol.id, vol.name);
-            successfulDeletions++;
             console.log(`✅ ${vol.name} 삭제 완료`);
           } catch (deleteError) {
-            failedDeletions++;
             console.error(`❌ ${vol.name} 삭제 실패:`, deleteError);
-            toast.error(`볼륨 ${vol.name} 삭제에 실패했습니다.`);
           }
         }
-        
-        toast.dismiss('delete-volumes');
-        
-        if (successfulDeletions > 0 && failedDeletions === 0) {
-          toast.success('인스턴스와 모든 볼륨을 삭제했습니다.');
-        } else if (successfulDeletions > 0) {
-          toast.error(`인스턴스와 ${successfulDeletions}개 볼륨을 삭제했습니다. ${failedDeletions}개 볼륨 삭제 실패.`);
-        } else {
-          toast.error('인스턴스는 삭제되었지만 볼륨 삭제에 실패했습니다.');
-        }
-      } else {
-        toast.success('인스턴스를 삭제했습니다.');
       }
       
-      navigate('/compute');
+      // Cloudflare 터널 정리
+      const tunnelId = instance.metadata?.cloudflare_tunnel_id;
+      const tunnelDomain = instance.metadata?.cloudflare_tunnel_domain;
+      if (tunnelId) {
+        try {
+          console.log('Cloudflare 터널 정리 중...');
+          // DNS 레코드 삭제
+          if (tunnelDomain) {
+            await cloudflareService.deleteDNSRecord(tunnelDomain);
+          }
+          // 터널 삭제
+          await cloudflareService.deleteTunnel(tunnelId);
+          console.log('✅ Cloudflare 터널 삭제 완료');
+        } catch (tunnelError) {
+          console.error('Cloudflare 터널 정리 실패:', tunnelError);
+        }
+      }
+      
+      toast.success('인스턴스 삭제 완료', { id: 'delete-instance' });
     } catch (error) {
       console.error('삭제 실패:', error);
       toast.error('인스턴스 삭제에 실패했습니다.');
@@ -657,6 +605,7 @@ const InstanceDetailPage: React.FC = () => {
             { id: 'network', label: '네트워크', icon: Network },
             { id: 'storage', label: '스토리지', icon: HardDrive },
             { id: 'security', label: '보안', icon: Shield },
+            { id: 'connect', label: '연결', icon: Terminal },
             { id: 'console', label: '콘솔', icon: Monitor },
             { id: 'logs', label: '로그', icon: FileText },
           ].map((tab) => (
@@ -1220,10 +1169,32 @@ const InstanceDetailPage: React.FC = () => {
           {consoleUrl ? (
             <div className="border border-gray-300 dark:border-gray-600 rounded-lg overflow-hidden">
               <iframe
+                id="vnc-console-iframe"
                 src={consoleUrl}
                 className="w-full h-96"
                 title="VNC Console"
                 sandbox="allow-same-origin allow-scripts allow-forms"
+                onLoad={() => {
+                  // noVNC iframe이 로드된 후 WebSocket 경로 수정
+                  try {
+                    const iframe = document.getElementById('vnc-console-iframe') as HTMLIFrameElement;
+                    if (iframe && iframe.contentWindow) {
+                      // noVNC가 WebSocket을 생성할 때 올바른 경로 사용하도록 보장
+                      // noVNC는 자동으로 현재 페이지의 호스트를 사용하므로,
+                      // 경로만 올바르게 설정하면 됨
+                      const urlObj = new URL(consoleUrl.startsWith('/') ? `https://leee.cloud${consoleUrl}` : consoleUrl);
+                      const path = urlObj.searchParams.get('path');
+                      if (path) {
+                        const tokenMatch = path.match(/token=([^&]+)/);
+                        if (tokenMatch) {
+                          console.log('VNC 토큰 확인:', tokenMatch[1]);
+                        }
+                      }
+                    }
+                  } catch (error) {
+                    console.error('VNC 콘솔 iframe 처리 오류:', error);
+                  }
+                }}
               />
             </div>
           ) : (
@@ -1232,6 +1203,1313 @@ const InstanceDetailPage: React.FC = () => {
               <p className="text-gray-500 dark:text-gray-400">VNC 콘솔에 연결하려면 위의 버튼을 클릭하세요.</p>
             </div>
           )}
+        </div>
+      )}
+
+      {activeTab === 'connect' && (
+        <div className="space-y-6">
+          {(() => {
+            if (!instance) {
+              return (
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+                  <div className="text-center py-12">
+                    <Terminal className="h-12 w-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+                    <p className="text-gray-500 dark:text-gray-400 text-lg">인스턴스 정보를 불러오는 중...</p>
+                  </div>
+                </div>
+              );
+            }
+
+            const tunnelDomain = instance?.metadata?.cloudflare_tunnel_domain;
+            const username = 'ubuntu'; // 기본 사용자명 (Ubuntu 이미지 기준)
+            
+            if (!tunnelDomain) {
+              return (
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+                  <div className="text-center py-12">
+                    <Terminal className="h-12 w-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+                    <p className="text-gray-500 dark:text-gray-400 text-lg">Cloudflare Tunnel이 설정되지 않았습니다.</p>
+                    <p className="text-gray-400 dark:text-gray-500 text-sm mt-2">
+                      인스턴스 생성 시 "Cloudflare Tunnel 자동 설정" 옵션을 활성화하면 SSH 연결 정보가 표시됩니다.
+                    </p>
+                  </div>
+                </div>
+              );
+            }
+
+            const copyToClipboard = async (text: string, commandId: string) => {
+              try {
+                await navigator.clipboard.writeText(text);
+                setCopiedCommand(commandId);
+                toast.success('명령어가 복사되었습니다.');
+                setTimeout(() => setCopiedCommand(null), 2000);
+              } catch (error) {
+                toast.error('복사에 실패했습니다.');
+              }
+            };
+
+            return (
+              <>
+                {/* 서브 탭 네비게이션 */}
+                <div className="bg-white dark:bg-gray-800 rounded-lg shadow">
+                  <div className="border-b border-gray-200 dark:border-gray-600">
+                    <nav className="-mb-px flex space-x-8 px-6">
+                      {[
+                        { id: 'quick', label: '빠른 연결', icon: Zap },
+                        { id: 'macos', label: 'macOS/Linux', icon: Terminal },
+                        { id: 'windows', label: 'Windows', icon: Monitor },
+                        { id: 'putty', label: 'PuTTY', icon: Settings },
+                        { id: 'troubleshoot', label: '문제 해결', icon: Info },
+                      ].map((tab) => (
+                        <button
+                          key={tab.id}
+                          onClick={() => setConnectSubTab(tab.id as any)}
+                          className={`py-3 px-1 border-b-2 font-medium text-sm flex items-center ${
+                            connectSubTab === tab.id
+                              ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                              : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-500'
+                          }`}
+                        >
+                          <tab.icon className="h-4 w-4 mr-2" />
+                          {tab.label}
+                        </button>
+                      ))}
+                    </nav>
+                  </div>
+                </div>
+
+                {/* 빠른 연결 탭 */}
+                {connectSubTab === 'quick' && (
+                  <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 space-y-6">
+                    <div className="text-center pb-4">
+                      <h3 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2">원클릭 연결</h3>
+                      <p className="text-gray-500 dark:text-gray-400">가장 간단한 방법으로 연결하세요</p>
+                    </div>
+
+                    {/* Tunnel 문제 해결 버튼들 */}
+                    {instance?.metadata?.cloudflare_tunnel_id && (
+                      <div className="space-y-3">
+                        {/* 자동 준비 버튼 */}
+                        <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-4 border-2 border-green-200 dark:border-green-800">
+                          <div className="mb-3">
+                            <h4 className="text-sm font-semibold text-green-800 dark:text-green-200 mb-2 flex items-center">
+                              <Check className="h-4 w-4 mr-2" />
+                              🚀 SSH 연결 준비 자동 완료 (추천!)
+                            </h4>
+                            <p className="text-xs text-green-700 dark:text-green-300 mb-3">
+                              이 버튼 하나로 DNS, Ingress 규칙 등 모든 준비를 자동으로 완료합니다.
+                              <br />
+                              <strong>PuTTY와 일반 SSH 모두 동일한 문제가 발생할 수 있습니다.</strong>
+                            </p>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const tunnelId = instance.metadata?.cloudflare_tunnel_id;
+                                  const tunnelDomain = instance.metadata?.cloudflare_tunnel_domain;
+                                  if (!tunnelId || !tunnelDomain) {
+                                    toast.error('Tunnel 정보를 찾을 수 없습니다.');
+                                    return;
+                                  }
+                                  toast.loading('SSH 연결 준비 중... (DNS + Ingress 설정)', { id: 'prepare-ssh' });
+                                  const result = await cloudflareService.prepareSSHConnection(tunnelId, tunnelDomain);
+                                  
+                                  if (result.allReady) {
+                                    const actionText = result.actions.length > 0 
+                                      ? `다음 작업을 완료했습니다: ${result.actions.join(', ')}`
+                                      : '모든 설정이 완료되어 있습니다.';
+                                    toast.success(`${actionText} 3-5분 후 SSH 연결을 시도하세요.`, { 
+                                      id: 'prepare-ssh',
+                                      duration: 10000 
+                                    });
+                                  } else {
+                                    toast.success('설정을 완료했습니다. 3-5분 후 SSH 연결을 시도하세요.', { 
+                                      id: 'prepare-ssh',
+                                      duration: 10000 
+                                    });
+                                  }
+                                } catch (error: any) {
+                                  toast.error(`SSH 연결 준비 실패: ${error.message}`, { 
+                                    id: 'prepare-ssh',
+                                    duration: 8000 
+                                  });
+                                }
+                              }}
+                              className="w-full px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-semibold"
+                            >
+                              ✅ SSH 연결 준비 완료하기
+                            </button>
+                            <div className="text-xs text-green-600 dark:text-green-400 mt-2">
+                              💡 이 버튼을 클릭하면 DNS 레코드와 Ingress 규칙이 자동으로 설정됩니다.
+                              <br />
+                              완료 후 3-5분 정도 기다린 다음 SSH 연결을 시도하세요.
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-4 border-2 border-red-200 dark:border-red-800">
+                          <div className="mb-3">
+                            <h4 className="text-sm font-semibold text-red-800 dark:text-red-200 mb-2 flex items-center">
+                              <AlertCircle className="h-4 w-4 mr-2" />
+                              SSH 연결이 안 되는 경우 수동 해결 방법
+                            </h4>
+                            <p className="text-xs text-red-700 dark:text-red-300 mb-3">
+                              아래 단계를 <strong>순서대로</strong> 진행하세요:
+                            </p>
+                            
+                            {/* 단계별 해결 방법 */}
+                            <div className="space-y-3 text-xs">
+                              <div className="bg-red-100 dark:bg-red-900 rounded p-3">
+                                <div className="font-semibold text-red-800 dark:text-red-200 mb-2">1단계: DNS 레코드 재생성 (필수!)</div>
+                                <div className="text-red-700 dark:text-red-300 mb-2">
+                                  <strong>"DNS 강제 재생성"</strong> 버튼을 클릭한 후 <strong>3-5분</strong> 기다리세요.
+                                  <br />
+                                  <span className="text-xs">DNS 전파가 완료되기까지 시간이 걸릴 수 있습니다.</span>
+                                </div>
+                                <div className="flex gap-2 mb-2">
+                                  <button
+                                    onClick={async () => {
+                                      try {
+                                        const tunnelId = instance.metadata?.cloudflare_tunnel_id;
+                                        const tunnelDomain = instance.metadata?.cloudflare_tunnel_domain;
+                                        if (!tunnelId || !tunnelDomain) {
+                                          toast.error('Tunnel 정보를 찾을 수 없습니다.');
+                                          return;
+                                        }
+                                        toast.loading('DNS 레코드 강제 재생성 중...', { id: 'fix-dns' });
+                                        await cloudflareService.addDNSRecord(tunnelDomain, tunnelId, true);
+                                        toast.success('DNS 레코드를 강제 재생성했습니다. 3-5분 후 다시 시도하세요.', { 
+                                          id: 'fix-dns',
+                                          duration: 8000 
+                                        });
+                                      } catch (error: any) {
+                                        toast.error(`DNS 레코드 재생성 실패: ${error.message}`, { 
+                                          id: 'fix-dns',
+                                          duration: 8000 
+                                        });
+                                      }
+                                    }}
+                                    className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs font-medium flex-1"
+                                  >
+                                    DNS 강제 재생성
+                                  </button>
+                                  <button
+                                    onClick={async () => {
+                                      try {
+                                        const tunnelDomain = instance.metadata?.cloudflare_tunnel_domain;
+                                        if (!tunnelDomain) {
+                                          toast.error('Tunnel 도메인을 찾을 수 없습니다.');
+                                          return;
+                                        }
+                                        toast.loading('DNS 레코드 확인 중...', { id: 'check-dns' });
+                                        const check = await cloudflareService.checkDNSRecord(tunnelDomain);
+                                        if (check.exists) {
+                                          toast.success(`DNS 레코드가 존재합니다: ${check.content}`, { 
+                                            id: 'check-dns',
+                                            duration: 5000 
+                                          });
+                                        } else {
+                                          toast.error('DNS 레코드를 찾을 수 없습니다. 재생성이 필요합니다.', { 
+                                            id: 'check-dns',
+                                            duration: 5000 
+                                          });
+                                        }
+                                      } catch (error: any) {
+                                        toast.error(`DNS 확인 실패: ${error.message}`, { 
+                                          id: 'check-dns',
+                                          duration: 5000 
+                                        });
+                                      }
+                                    }}
+                                    className="px-3 py-1.5 bg-gray-600 text-white rounded hover:bg-gray-700 text-xs font-medium"
+                                  >
+                                    DNS 확인
+                                  </button>
+                                </div>
+                                <div className="text-xs text-red-600 dark:text-red-400 mt-2">
+                                  💡 <strong>팁:</strong> DNS 재생성 후 로컬 DNS 캐시를 지우세요:
+                                  <br />
+                                  <code className="bg-red-50 dark:bg-red-950 px-1 rounded">sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder</code>
+                                </div>
+                              </div>
+
+                              <div className="bg-red-100 dark:bg-red-900 rounded p-3">
+                                <div className="font-semibold text-red-800 dark:text-red-200 mb-2">2단계: Ingress 규칙 추가</div>
+                                <div className="text-red-700 dark:text-red-300 mb-2">
+                                  "ingress 규칙 추가" 버튼을 클릭한 후 <strong>2-3분</strong> 기다리세요.
+                                </div>
+                                <button
+                                  onClick={async () => {
+                                    try {
+                                      const tunnelId = instance.metadata?.cloudflare_tunnel_id;
+                                      const tunnelDomain = instance.metadata?.cloudflare_tunnel_domain;
+                                      if (!tunnelId || !tunnelDomain) {
+                                        toast.error('Tunnel 정보를 찾을 수 없습니다.');
+                                        return;
+                                      }
+                                      toast.loading('ingress 규칙 추가 중...', { id: 'fix-tunnel' });
+                                      await cloudflareService.updateTunnelConfig(tunnelId, tunnelDomain, 'ssh://localhost:22');
+                                      toast.success('ingress 규칙을 추가했습니다. 2-3분 후 SSH 연결을 시도하세요.', { 
+                                        id: 'fix-tunnel',
+                                        duration: 7000 
+                                      });
+                                    } catch (error: any) {
+                                      toast.error(`ingress 규칙 추가 실패: ${error.message}`, { 
+                                        id: 'fix-tunnel',
+                                        duration: 7000 
+                                      });
+                                    }
+                                  }}
+                                  className="px-3 py-1.5 bg-yellow-600 text-white rounded hover:bg-yellow-700 text-xs font-medium"
+                                >
+                                  ingress 규칙 추가
+                                </button>
+                              </div>
+
+                              <div className="bg-red-100 dark:bg-red-900 rounded p-3">
+                                <div className="font-semibold text-red-800 dark:text-red-200 mb-2">3단계: 인스턴스 콘솔에서 설정 확인 및 수정</div>
+                                <div className="text-red-700 dark:text-red-300 mb-2">
+                                  OpenStack 콘솔로 인스턴스에 접속한 후 아래 명령어를 실행하세요:
+                                </div>
+
+                                {/* 진단 명령어 */}
+                                <div className="mb-3">
+                                  <div className="text-xs font-semibold text-red-800 dark:text-red-200 mb-1">🔍 먼저 상태 확인 (복사해서 실행):</div>
+                                  <div className="bg-red-50 dark:bg-red-950 rounded p-2 font-mono text-xs mb-2">
+                                    <div className="mb-1"># Cloudflare Tunnel 서비스 상태 확인</div>
+                                    <div className="mb-1">systemctl status cloudflared-tunnel</div>
+                                    <div className="mb-1"># 최근 로그 확인</div>
+                                    <div className="mb-1">journalctl -u cloudflared-tunnel -n 50 --no-pager</div>
+                                    <div className="mb-1"># config.yml 파일 확인</div>
+                                    <div className="mb-1">cat /etc/cloudflared/config.yml</div>
+                                    <div className="mb-1"># SSH 서비스 상태 확인</div>
+                                    <div>systemctl status ssh || systemctl status sshd</div>
+                                  </div>
+                                  <button
+                                    onClick={() => {
+                                      const command = `systemctl status cloudflared-tunnel
+journalctl -u cloudflared-tunnel -n 50 --no-pager
+cat /etc/cloudflared/config.yml
+systemctl status ssh || systemctl status sshd`;
+                                      copyToClipboard(command, 'diagnose');
+                                    }}
+                                    className="px-3 py-1.5 bg-gray-600 text-white rounded hover:bg-gray-700 text-xs font-medium mb-2"
+                                  >
+                                    {copiedCommand === 'diagnose' ? (
+                                      <span className="flex items-center">
+                                        <Check className="h-3 w-3 mr-1" />
+                                        복사됨
+                                      </span>
+                                    ) : (
+                                      <span className="flex items-center">
+                                        <Copy className="h-3 w-3 mr-1" />
+                                        진단 명령어 복사
+                                      </span>
+                                    )}
+                                  </button>
+                                </div>
+
+                                {/* config.yml 생성 명령어 */}
+                                <div className="mb-3">
+                                  <div className="text-xs font-semibold text-red-800 dark:text-red-200 mb-1">⚙️ config.yml 파일 생성/수정 (중요!):</div>
+                                  <div className="bg-red-50 dark:bg-red-950 rounded p-2 font-mono text-xs mb-2">
+                                    <div>sudo mkdir -p /etc/cloudflared</div>
+                                    <div>sudo tee /etc/cloudflared/config.yml &lt;&lt;EOF</div>
+                                    <div>ingress:</div>
+                                    <div>&nbsp;&nbsp;- hostname: {tunnelDomain}</div>
+                                    <div>&nbsp;&nbsp;&nbsp;&nbsp;service: ssh://localhost:22</div>
+                                    <div>&nbsp;&nbsp;- service: http_status:404</div>
+                                    <div>EOF</div>
+                                    <div>sudo chmod 600 /etc/cloudflared/config.yml</div>
+                                    <div>sudo systemctl restart cloudflared-tunnel</div>
+                                  </div>
+                                  <button
+                                    onClick={() => {
+                                      const command = `sudo mkdir -p /etc/cloudflared
+sudo tee /etc/cloudflared/config.yml > /dev/null <<EOF
+ingress:
+  - hostname: ${tunnelDomain}
+    service: ssh://localhost:22
+  - service: http_status:404
+EOF
+sudo chmod 600 /etc/cloudflared/config.yml
+sudo systemctl restart cloudflared-tunnel`;
+                                      copyToClipboard(command, 'fix-config');
+                                    }}
+                                    className="px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700 text-xs font-medium"
+                                  >
+                                    {copiedCommand === 'fix-config' ? (
+                                      <span className="flex items-center">
+                                        <Check className="h-3 w-3 mr-1" />
+                                        복사됨
+                                      </span>
+                                    ) : (
+                                      <span className="flex items-center">
+                                        <Copy className="h-3 w-3 mr-1" />
+                                        config.yml 생성 명령어 복사
+                                      </span>
+                                    )}
+                                  </button>
+                                </div>
+
+                                {/* 재시작 및 로그 확인 명령어 */}
+                                <div>
+                                  <div className="text-xs font-semibold text-red-800 dark:text-red-200 mb-1">🔄 서비스 재시작 및 실시간 로그 확인:</div>
+                                  <div className="bg-red-50 dark:bg-red-950 rounded p-2 font-mono text-xs mb-2">
+                                    <div className="mb-1"># Tunnel 서비스 재시작</div>
+                                    <div className="mb-1">sudo systemctl restart cloudflared-tunnel</div>
+                                    <div className="mb-1"># 재시작 후 상태 확인</div>
+                                    <div className="mb-1">sleep 5 && systemctl status cloudflared-tunnel</div>
+                                    <div className="mb-1"># 실시간 로그 확인 (Ctrl+C로 종료)</div>
+                                    <div>journalctl -u cloudflared-tunnel -f</div>
+                                  </div>
+                                  <button
+                                    onClick={() => {
+                                      const command = `sudo systemctl restart cloudflared-tunnel
+sleep 5
+systemctl status cloudflared-tunnel
+echo "=== 최근 로그 ==="
+journalctl -u cloudflared-tunnel -n 30 --no-pager`;
+                                      copyToClipboard(command, 'restart-check');
+                                    }}
+                                    className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs font-medium"
+                                  >
+                                    {copiedCommand === 'restart-check' ? (
+                                      <span className="flex items-center">
+                                        <Check className="h-3 w-3 mr-1" />
+                                        복사됨
+                                      </span>
+                                    ) : (
+                                      <span className="flex items-center">
+                                        <Copy className="h-3 w-3 mr-1" />
+                                        재시작 및 확인 명령어 복사
+                                      </span>
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="bg-red-100 dark:bg-red-900 rounded p-3">
+                                <div className="font-semibold text-red-800 dark:text-red-200 mb-2">4단계: 클라이언트(macOS)에서 DNS 확인</div>
+                                <div className="text-red-700 dark:text-red-300 mb-2">
+                                  인스턴스는 정상입니다. 이제 클라이언트에서 DNS를 확인하세요:
+                                </div>
+                                <div className="bg-red-50 dark:bg-red-950 rounded p-2 font-mono text-xs mb-2">
+                                  <div className="mb-1"># DNS 레코드 조회 (CNAME 확인)</div>
+                                  <div className="mb-1">dig +short {tunnelDomain} CNAME</div>
+                                  <div className="mb-1"># 또는 A 레코드 조회 (최종 IP 확인)</div>
+                                  <div className="mb-1">dig +short {tunnelDomain} A</div>
+                                  <div className="mb-1"># nslookup으로 확인</div>
+                                  <div className="mb-1">nslookup {tunnelDomain}</div>
+                                  <div className="mb-1"># macOS DNS 캐시 지우기 (중요!)</div>
+                                  <div>sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder</div>
+                                </div>
+                                <button
+                                  onClick={() => {
+                                    const command = `dig +short ${tunnelDomain} CNAME
+dig +short ${tunnelDomain} A
+nslookup ${tunnelDomain}
+echo "=== DNS 캐시 지우기 ==="
+sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`;
+                                    copyToClipboard(command, 'dns-check');
+                                  }}
+                                  className="px-3 py-1.5 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs font-medium mb-2"
+                                >
+                                  {copiedCommand === 'dns-check' ? (
+                                    <span className="flex items-center">
+                                      <Check className="h-3 w-3 mr-1" />
+                                      복사됨
+                                    </span>
+                                  ) : (
+                                    <span className="flex items-center">
+                                      <Copy className="h-3 w-3 mr-1" />
+                                      DNS 확인 명령어 복사
+                                    </span>
+                                  )}
+                                </button>
+                                <div className="text-xs text-red-600 dark:text-red-400 mb-3">
+                                  💡 <strong>중요:</strong> DNS 캐시를 지운 후 다시 시도하세요.
+                                </div>
+                              </div>
+
+                              <div className="bg-red-100 dark:bg-red-900 rounded p-3">
+                                <div className="font-semibold text-red-800 dark:text-red-200 mb-2">5단계: SSH 연결 시도</div>
+                                <div className="text-red-700 dark:text-red-300 mb-2">
+                                  DNS 캐시를 지운 후 연결하세요:
+                                </div>
+                                <div className="bg-red-50 dark:bg-red-950 rounded p-2 font-mono text-xs mb-2">
+                                  <div className="mb-1"># 방법 1: 기본 연결</div>
+                                  <div className="mb-1">ssh {tunnelDomain}</div>
+                                  <div className="mb-1"># 방법 2: IPv4 강제 + 키 파일 사용</div>
+                                  <div>ssh -o AddressFamily=inet -i ~/Downloads/leekey.pem ubuntu@{tunnelDomain}</div>
+                                </div>
+                                <button
+                                  onClick={() => {
+                                    const command = instance?.key_name 
+                                      ? `ssh -o AddressFamily=inet -i ~/Downloads/leekey.pem ubuntu@${tunnelDomain}`
+                                      : `ssh -o AddressFamily=inet ubuntu@${tunnelDomain}`;
+                                    copyToClipboard(command, 'ssh-connect');
+                                  }}
+                                  className="px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700 text-xs font-medium"
+                                >
+                                  {copiedCommand === 'ssh-connect' ? (
+                                    <span className="flex items-center">
+                                      <Check className="h-3 w-3 mr-1" />
+                                      복사됨
+                                    </span>
+                                  ) : (
+                                    <span className="flex items-center">
+                                      <Copy className="h-3 w-3 mr-1" />
+                                      SSH 연결 명령어 복사
+                                    </span>
+                                  )}
+                                </button>
+                                <div className="text-xs text-red-600 dark:text-red-400 mt-2">
+                                  💡 SSH config 파일을 사용하는 것을 강력히 권장합니다 (아래 참고)
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 경고: IPv6 문제 */}
+                    <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-4 border-2 border-red-200 dark:border-red-800">
+                      <div className="flex items-start">
+                        <Info className="h-5 w-5 mr-2 text-red-600 dark:text-red-400 mt-0.5 flex-shrink-0" />
+                        <div className="flex-1">
+                          <h4 className="text-sm font-semibold text-red-800 dark:text-red-200 mb-2">
+                            ⚠️ "dial tcp [IPv6]:443: connect: no route to host" 에러 발생 시
+                          </h4>
+                          
+                          {/* SSH Config 파일 설정 방법 */}
+                          <div className="mb-3">
+                            <p className="text-xs text-red-700 dark:text-red-300 font-medium mb-2">
+                              1단계: SSH config 파일 설정 (필수)
+                            </p>
+                            <div className="bg-red-100 dark:bg-red-900 rounded p-3 font-mono text-xs mb-2">
+                              <div className="flex items-start justify-between mb-2">
+                                <div className="space-y-1 flex-1">
+                                  <div className="text-red-600 dark:text-red-400 mb-1"># 다음 명령어로 파일 열기:</div>
+                                  <div className="bg-red-50 dark:bg-red-950 px-2 py-1 rounded mb-2">
+                                    <div>nano ~/.ssh/config</div>
+                                  </div>
+                                  <div className="text-red-600 dark:text-red-400 mb-1 mt-2"># 아래 내용 추가 (복사 후 붙여넣기):</div>
+                                  <div className="bg-red-50 dark:bg-red-950 px-2 py-1 rounded">
+                                    {instance?.key_name ? (
+                                      <>
+                                        <div>Host {tunnelDomain}</div>
+                                        <div>&nbsp;&nbsp;AddressFamily inet</div>
+                                        <div>&nbsp;&nbsp;User {username}</div>
+                                        <div>&nbsp;&nbsp;IdentityFile ~/Downloads/leekey.pem</div>
+                                        <div>&nbsp;&nbsp;PreferredAuthentications publickey</div>
+                                        <div>&nbsp;&nbsp;StrictHostKeyChecking no</div>
+                                        <div>&nbsp;&nbsp;ConnectTimeout 10</div>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <div>Host {tunnelDomain}</div>
+                                        <div>&nbsp;&nbsp;AddressFamily inet</div>
+                                        <div>&nbsp;&nbsp;User {username}</div>
+                                        <div>&nbsp;&nbsp;PreferredAuthentications publickey</div>
+                                        <div>&nbsp;&nbsp;StrictHostKeyChecking no</div>
+                                        <div>&nbsp;&nbsp;ConnectTimeout 10</div>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={() => {
+                                    const config = instance?.key_name 
+                                      ? `Host ${tunnelDomain}\n    AddressFamily inet\n    User ${username}\n    IdentityFile ~/Downloads/leekey.pem\n    PreferredAuthentications publickey\n    StrictHostKeyChecking no\n    ConnectTimeout 10`
+                                      : `Host ${tunnelDomain}\n    AddressFamily inet\n    User ${username}\n    PreferredAuthentications publickey\n    StrictHostKeyChecking no\n    ConnectTimeout 10`;
+                                    copyToClipboard(config, 'ssh-config-fix');
+                                  }}
+                                  className="p-1 text-red-700 hover:text-red-900 dark:text-red-300 dark:hover:text-red-100 ml-2 flex-shrink-0"
+                                >
+                                  {copiedCommand === 'ssh-config-fix' ? (
+                                    <Check className="h-4 w-4 text-green-600" />
+                                  ) : (
+                                    <Copy className="h-4 w-4" />
+                                  )}
+                                </button>
+                              </div>
+                              <div className="text-red-600 dark:text-red-400 text-xs mt-2 pt-2 border-t border-red-200 dark:border-red-800 space-y-1">
+                                <div># 저장: Ctrl+O, Enter, Ctrl+X</div>
+                                <div># 파일 권한 설정: <code className="bg-red-200 dark:bg-red-800 px-1 rounded">chmod 600 ~/.ssh/config</code></div>
+                                <div># 연결 테스트: <code className="bg-red-200 dark:bg-red-800 px-1 rounded">ssh {tunnelDomain}</code></div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* 연결이 멈추는 경우 (타임아웃) */}
+                          <div className="mt-3 pt-3 border-t border-red-200 dark:border-red-800">
+                            <p className="text-xs text-red-700 dark:text-red-300 font-medium mb-2">
+                              ⚠️ 연결이 멈추거나 타임아웃되는 경우:
+                            </p>
+                            <div className="space-y-2 text-xs text-red-700 dark:text-red-300 mb-3">
+                              <div className="bg-red-50 dark:bg-red-950 rounded p-2 font-mono">
+                                <div># 1. 디버그 모드로 연결 시도 (어디서 멈추는지 확인):</div>
+                                <div className="mt-1">ssh -v -o ConnectTimeout=10 {tunnelDomain}</div>
+                                <div className="mt-2 text-red-600 dark:text-red-400"># 또는 더 자세한 로그:</div>
+                                <div>ssh -vvv -o ConnectTimeout=10 {tunnelDomain}</div>
+                              </div>
+                              <div className="mt-2">
+                                <strong>2. 가장 중요한 해결책:</strong> 인스턴스 상세 페이지에서 <strong className="bg-yellow-200 dark:bg-yellow-800 px-1 rounded">"ingress 규칙 추가"</strong> 버튼을 클릭한 후 <strong>최소 2-3분</strong> 기다리세요.
+                              </div>
+                              <div>
+                                <strong>3. 인스턴스 콘솔에서 확인:</strong> (OpenStack 콘솔 접속 후)
+                                <div className="bg-red-50 dark:bg-red-950 rounded p-2 font-mono mt-1 text-xs">
+                                  <div>systemctl status cloudflared-tunnel</div>
+                                  <div>journalctl -u cloudflared-tunnel -n 50 --no-pager</div>
+                                  <div>cat /etc/cloudflared/config.yml</div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* 추가 해결책 */}
+                          <div className="mt-3 pt-3 border-t border-red-200 dark:border-red-800">
+                            <p className="text-xs text-red-700 dark:text-red-300 font-medium mb-2">
+                              기타 해결책:
+                            </p>
+                            <div className="space-y-2 text-xs text-red-700 dark:text-red-300">
+                              <div>• <strong>"문제 해결"</strong> 탭에서 IPv4 주소를 직접 조회하여 사용</div>
+                              <div>• macOS에서 IPv6 완전 비활성화: <code className="bg-red-200 dark:bg-red-800 px-1 rounded">sudo networksetup -setv6off Wi-Fi</code></div>
+                              <div>• SSH config에 타임아웃 추가: <code className="bg-red-200 dark:bg-red-800 px-1 rounded">ConnectTimeout 10</code></div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* macOS/Linux 간편 명령어 */}
+                    <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-lg p-6 border-2 border-blue-200 dark:border-blue-800">
+                      <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center">
+                        <Terminal className="h-5 w-5 mr-2 text-blue-600 dark:text-blue-400" />
+                        macOS/Linux - 한 줄 명령어 (IPv6 문제 시 위 SSH config 사용 권장)
+                      </h4>
+                      <div className="bg-white dark:bg-gray-900 rounded-lg p-4 border border-blue-200 dark:border-blue-700">
+                        <div className="flex items-center justify-between">
+                          <code className="text-lg text-gray-900 dark:text-gray-100 font-mono flex-1">
+                            ssh -o AddressFamily=inet {username}@{tunnelDomain}
+                          </code>
+                          <button
+                            onClick={() => copyToClipboard(`ssh -o AddressFamily=inet ${username}@${tunnelDomain}`, 'quick-ssh')}
+                            className="ml-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center"
+                          >
+                            {copiedCommand === 'quick-ssh' ? (
+                              <>
+                                <Check className="h-4 w-4 mr-2" />
+                                복사됨
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="h-4 w-4 mr-2" />
+                                복사
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        {instance?.key_name && (
+                          <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">키 파일이 있는 경우:</p>
+                            <div className="flex items-center justify-between">
+                              <code className="text-sm text-gray-900 dark:text-gray-100 font-mono flex-1">
+                                ssh -o AddressFamily=inet -i ~/Downloads/leekey.pem {username}@{tunnelDomain}
+                              </code>
+                              <button
+                                onClick={() => copyToClipboard(`ssh -o AddressFamily=inet -i ~/Downloads/leekey.pem ${username}@${tunnelDomain}`, 'quick-ssh-key')}
+                                className="ml-4 px-3 py-1.5 bg-gray-600 text-white rounded hover:bg-gray-700"
+                              >
+                                {copiedCommand === 'quick-ssh-key' ? (
+                                  <Check className="h-4 w-4" />
+                                ) : (
+                                  <Copy className="h-4 w-4" />
+                                )}
+                              </button>
+                            </div>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">* 실제 키 파일 경로로 변경하세요</p>
+                          </div>
+                        )}
+                        <div className="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                          <p className="text-xs text-yellow-800 dark:text-yellow-200 font-medium mb-2">
+                            ⚠️ IPv6 연결 오류 발생 시:
+                          </p>
+                          <p className="text-xs text-yellow-700 dark:text-yellow-300 mb-2">
+                            1. 아래의 "권장 방법: SSH Config 파일 설정"을 사용하거나
+                          </p>
+                          <p className="text-xs text-yellow-700 dark:text-yellow-300">
+                            2. "문제 해결" 탭에서 IPv4 주소를 직접 조회하여 사용하세요
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* SSH Config 파일 방법 (권장) */}
+                    <div className="bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-lg p-6 border-2 border-green-200 dark:border-green-800">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center">
+                          <Zap className="h-5 w-5 mr-2 text-green-600 dark:text-green-400" />
+                          권장 방법: SSH Config 파일 설정
+                        </h4>
+                        <span className="px-2 py-1 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 text-xs font-medium rounded">
+                          추천
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                        한 번 설정하면 이후로는 <code className="bg-white dark:bg-gray-800 px-1 rounded">ssh {tunnelDomain}</code> 만 입력하면 연결됩니다!
+                      </p>
+                      <div className="bg-white dark:bg-gray-900 rounded-lg p-4 border border-green-200 dark:border-green-700">
+                        <div className="flex items-start justify-between">
+                          <div className="space-y-1 font-mono text-sm text-gray-900 dark:text-gray-100 flex-1">
+                            <div>Host {tunnelDomain}</div>
+                            <div>&nbsp;&nbsp;AddressFamily inet</div>
+                            <div>&nbsp;&nbsp;User {username}</div>
+                            {instance?.key_name && (
+                              <div>&nbsp;&nbsp;IdentityFile ~/Downloads/leekey.pem</div>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => copyToClipboard(`Host ${tunnelDomain}\n    AddressFamily inet\n    User ${username}${instance?.key_name ? '\n    IdentityFile ~/Downloads/leekey.pem' : ''}`, 'ssh-config-quick')}
+                            className="ml-4 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center"
+                          >
+                            {copiedCommand === 'ssh-config-quick' ? (
+                              <>
+                                <Check className="h-4 w-4 mr-2" />
+                                복사됨
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="h-4 w-4 mr-2" />
+                                복사
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                          <p className="text-xs text-gray-600 dark:text-gray-400 font-medium mb-1">설정 방법:</p>
+                          <ol className="text-xs text-gray-600 dark:text-gray-400 space-y-1 list-decimal list-inside">
+                            <li><code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">~/.ssh/config</code> 파일 열기 (없으면 생성)</li>
+                            <li>위 내용을 파일 끝에 추가</li>
+                            <li>키 파일 경로를 실제 경로로 수정 (필요시)</li>
+                            <li>터미널에서 <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">ssh {tunnelDomain}</code> 실행</li>
+                          </ol>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Windows 간편 명령어 */}
+                    <div className="bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 rounded-lg p-6 border-2 border-purple-200 dark:border-purple-800">
+                      <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center">
+                        <Monitor className="h-5 w-5 mr-2 text-purple-600 dark:text-purple-400" />
+                        Windows - PowerShell/CMD
+                      </h4>
+                      <div className="bg-white dark:bg-gray-900 rounded-lg p-4 border border-purple-200 dark:border-purple-700">
+                        <div className="flex items-center justify-between">
+                          <code className="text-lg text-gray-900 dark:text-gray-100 font-mono flex-1">
+                            ssh -o AddressFamily=inet {username}@{tunnelDomain}
+                          </code>
+                          <button
+                            onClick={() => copyToClipboard(`ssh -o AddressFamily=inet ${username}@${tunnelDomain}`, 'quick-win-ssh')}
+                            className="ml-4 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 flex items-center"
+                          >
+                            {copiedCommand === 'quick-win-ssh' ? (
+                              <>
+                                <Check className="h-4 w-4 mr-2" />
+                                복사됨
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="h-4 w-4 mr-2" />
+                                복사
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                          Windows 10 1809 이상 또는 Windows 11에서는 OpenSSH가 기본 제공됩니다.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* 연결 정보 요약 */}
+                    <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+                      <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">연결 정보</h4>
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <span className="text-gray-500 dark:text-gray-400">호스트:</span>
+                          <code className="ml-2 text-gray-900 dark:text-gray-100 font-mono">{tunnelDomain}</code>
+                        </div>
+                        <div>
+                          <span className="text-gray-500 dark:text-gray-400">포트:</span>
+                          <span className="ml-2 text-gray-900 dark:text-gray-100">22</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500 dark:text-gray-400">사용자:</span>
+                          <span className="ml-2 text-gray-900 dark:text-gray-100">{username}</span>
+                        </div>
+                        {instance?.key_name && (
+                          <div>
+                            <span className="text-gray-500 dark:text-gray-400">키 페어:</span>
+                            <span className="ml-2 text-gray-900 dark:text-gray-100">{instance.key_name}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* macOS/Linux 상세 탭 */}
+                {connectSubTab === 'macos' && (
+                  <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+                    <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4 flex items-center">
+                      <Terminal className="h-5 w-5 mr-2" />
+                      macOS/Linux SSH 클라이언트
+                    </h3>
+                  
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                          1. 기본 SSH 연결 명령어
+                        </label>
+                        <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <code className="text-sm text-gray-900 dark:text-gray-100 font-mono">
+                              ssh -o AddressFamily=inet {username}@{tunnelDomain}
+                            </code>
+                            <button
+                              onClick={() => copyToClipboard(`ssh -o AddressFamily=inet ${username}@${tunnelDomain}`, 'mac-ssh')}
+                              className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                            >
+                              {copiedCommand === 'mac-ssh' ? (
+                                <Check className="h-4 w-4 text-green-600" />
+                              ) : (
+                                <Copy className="h-4 w-4" />
+                              )}
+                            </button>
+                          </div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            * <code className="bg-gray-200 dark:bg-gray-600 px-1 rounded">-o AddressFamily=inet</code> 옵션은 IPv4 연결만 강제합니다 (IPv6 라우팅 문제 해결).
+                          </p>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                          2. 키 파일이 있는 경우
+                        </label>
+                        <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <code className="text-sm text-gray-900 dark:text-gray-100 font-mono">
+                              ssh -o AddressFamily=inet -i ~/path/to/your/key.pem {username}@{tunnelDomain}
+                            </code>
+                            <button
+                              onClick={() => copyToClipboard(`ssh -o AddressFamily=inet -i ~/path/to/your/key.pem ${username}@${tunnelDomain}`, 'mac-ssh-key')}
+                              className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                            >
+                              {copiedCommand === 'mac-ssh-key' ? (
+                                <Check className="h-4 w-4 text-green-600" />
+                              ) : (
+                                <Copy className="h-4 w-4" />
+                              )}
+                            </button>
+                          </div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            * 실제 키 파일 경로로 변경하세요 (예: <code className="bg-gray-200 dark:bg-gray-600 px-1 rounded">~/Downloads/leekey.pem</code>).
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Windows 상세 탭 */}
+                {connectSubTab === 'windows' && (
+                  <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+                    <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4 flex items-center">
+                      <Monitor className="h-5 w-5 mr-2" />
+                      Windows SSH 클라이언트 (PowerShell/CMD)
+                    </h3>
+                  
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                          1. SSH 클라이언트 설치 (아직 설치하지 않은 경우)
+                        </label>
+                        <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+                          <div className="flex items-center justify-between mb-2">
+                            <code className="text-sm text-gray-900 dark:text-gray-100 font-mono">
+                              winget install Microsoft.OpenSSH.Beta
+                            </code>
+                            <button
+                              onClick={() => copyToClipboard('winget install Microsoft.OpenSSH.Beta', 'win-install')}
+                              className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                            >
+                              {copiedCommand === 'win-install' ? (
+                                <Check className="h-4 w-4 text-green-600" />
+                              ) : (
+                                <Copy className="h-4 w-4" />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                          2. SSH 연결 명령어
+                        </label>
+                        <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <code className="text-sm text-gray-900 dark:text-gray-100 font-mono">
+                              ssh -o AddressFamily=inet {username}@{tunnelDomain}
+                            </code>
+                            <button
+                              onClick={() => copyToClipboard(`ssh -o AddressFamily=inet ${username}@${tunnelDomain}`, 'win-ssh')}
+                              className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                            >
+                              {copiedCommand === 'win-ssh' ? (
+                                <Check className="h-4 w-4 text-green-600" />
+                              ) : (
+                                <Copy className="h-4 w-4" />
+                              )}
+                            </button>
+                          </div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            * <code className="bg-gray-200 dark:bg-gray-600 px-1 rounded">-o AddressFamily=inet</code> 옵션은 IPv4 연결만 강제합니다 (IPv6 문제 해결).
+                          </p>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                          3. 키 파일이 있는 경우
+                        </label>
+                        <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+                          <div className="flex items-center justify-between mb-2">
+                            <code className="text-sm text-gray-900 dark:text-gray-100 font-mono">
+                              ssh -o AddressFamily=inet -i "C:\path\to\your\key.pem" {username}@{tunnelDomain}
+                            </code>
+                            <button
+                              onClick={() => copyToClipboard(`ssh -o AddressFamily=inet -i "C:\\path\\to\\your\\key.pem" ${username}@${tunnelDomain}`, 'win-ssh-key')}
+                              className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                            >
+                              {copiedCommand === 'win-ssh-key' ? (
+                                <Check className="h-4 w-4 text-green-600" />
+                              ) : (
+                                <Copy className="h-4 w-4" />
+                              )}
+                            </button>
+                          </div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                            * 실제 키 파일 경로로 변경하세요. Windows 경로 구분자는 백슬래시(\\) 또는 슬래시(/)를 사용할 수 있습니다.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                        <p className="text-sm text-blue-800 dark:text-blue-200">
+                          <strong>참고:</strong> Windows 10 버전 1809 이상 또는 Windows 11에서는 OpenSSH 클라이언트가 기본 제공됩니다.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* PuTTY 상세 탭 */}
+                {connectSubTab === 'putty' && (
+                  <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+                    <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4 flex items-center">
+                      <Settings className="h-5 w-5 mr-2" />
+                      PuTTY
+                    </h3>
+                  
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        1. PuTTY 다운로드 (아직 설치하지 않은 경우)
+                      </label>
+                      <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+                        <p className="text-sm text-gray-900 dark:text-gray-100 mb-2">
+                          공식 웹사이트: <a href="https://www.putty.org/" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">https://www.putty.org/</a>
+                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          또는 Windows Package Manager를 사용: <code className="bg-gray-200 dark:bg-gray-600 px-1 rounded">winget install PuTTY.PuTTY</code>
+                        </p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        2. PuTTY 설정
+                      </label>
+                      <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600 space-y-3">
+                        <div>
+                          <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">호스트 이름 (Host Name):</p>
+                          <div className="flex items-center justify-between">
+                            <code className="text-sm text-gray-900 dark:text-gray-100 font-mono bg-white dark:bg-gray-800 px-2 py-1 rounded">
+                              {tunnelDomain}
+                            </code>
+                            <button
+                              onClick={() => copyToClipboard(tunnelDomain, 'putty-host')}
+                              className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                            >
+                              {copiedCommand === 'putty-host' ? (
+                                <Check className="h-4 w-4 text-green-600" />
+                              ) : (
+                                <Copy className="h-4 w-4" />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">포트 (Port):</p>
+                          <code className="text-sm text-gray-900 dark:text-gray-100 font-mono bg-white dark:bg-gray-800 px-2 py-1 rounded">22</code>
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">연결 타입 (Connection type):</p>
+                          <code className="text-sm text-gray-900 dark:text-gray-100 font-mono bg-white dark:bg-gray-800 px-2 py-1 rounded">SSH</code>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        2-1. IPv4 강제 설정 (IPv6 문제 방지)
+                      </label>
+                      <div className="bg-yellow-50 dark:bg-yellow-900/20 rounded-lg p-4 border border-yellow-200 dark:border-yellow-800">
+                        <p className="text-sm text-yellow-800 dark:text-yellow-200 mb-3">
+                          <strong>⚠️ 중요:</strong> "dial tcp [IPv6]:443: connect: no route to host" 오류가 발생하는 경우 아래 방법을 사용하세요.
+                        </p>
+                        <div className="space-y-3">
+                          <div>
+                            <p className="text-xs font-medium text-yellow-800 dark:text-yellow-200 mb-1">방법 1: IPv4 주소 직접 사용</p>
+                            <ol className="list-decimal list-inside space-y-1 text-xs text-yellow-800 dark:text-yellow-200 ml-2">
+                              <li>Windows 명령 프롬프트에서 실행: <code className="bg-yellow-100 dark:bg-yellow-900 px-1 rounded">nslookup {tunnelDomain}</code></li>
+                              <li>나오는 IPv4 주소를 복사 (예: 198.41.192.57)</li>
+                              <li>PuTTY의 Host Name 필드에 IPv4 주소를 직접 입력</li>
+                              <li>단, 이 방법은 IP가 변경될 수 있어 권장하지 않음</li>
+                            </ol>
+                          </div>
+                          <div>
+                            <p className="text-xs font-medium text-yellow-800 dark:text-yellow-200 mb-1">방법 2: PuTTY 네트워크 설정 (권장)</p>
+                            <ol className="list-decimal list-inside space-y-1 text-xs text-yellow-800 dark:text-yellow-200 ml-2">
+                              <li>PuTTY 창에서 <strong>Connection → Proxy</strong> 메뉴로 이동</li>
+                              <li><strong>Proxy type</strong>을 <strong>"Local"</strong> 또는 <strong>"None"</strong>으로 설정</li>
+                              <li><strong>Session</strong> 메뉴로 돌아가기</li>
+                              <li><strong>Connection → Data</strong>에서 "Use DNS to find host" 체크 해제 (없는 경우 무시)</li>
+                            </ol>
+                          </div>
+                          <div>
+                            <p className="text-xs font-medium text-yellow-800 dark:text-yellow-200 mb-1">방법 3: Windows 호스트 파일 편집</p>
+                            <ol className="list-decimal list-inside space-y-1 text-xs text-yellow-800 dark:text-yellow-200 ml-2">
+                              <li><code className="bg-yellow-100 dark:bg-yellow-900 px-1 rounded">nslookup {tunnelDomain}</code> 실행하여 IPv4 주소 확인</li>
+                              <li>관리자 권한으로 메모장 실행</li>
+                              <li><code className="bg-yellow-100 dark:bg-yellow-900 px-1 rounded">C:\Windows\System32\drivers\etc\hosts</code> 파일 열기</li>
+                              <li>파일 끝에 추가: <code className="bg-yellow-100 dark:bg-yellow-900 px-1 rounded">[IPv4주소] {tunnelDomain}</code></li>
+                              <li>저장 후 PuTTY 재연결</li>
+                            </ol>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        2-2. DNS 해석 확인 (연결 실패 시)
+                      </label>
+                      <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+                        <p className="text-sm text-gray-900 dark:text-gray-100 mb-2">
+                          Windows 명령 프롬프트(CMD)에서 다음 명령어를 실행하여 DNS 확인:
+                        </p>
+                        <div className="bg-white dark:bg-gray-800 rounded p-2 font-mono text-xs space-y-1 mb-2">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div>nslookup {tunnelDomain}</div>
+                              <div className="text-gray-500 dark:text-gray-400">또는</div>
+                              <div>ping {tunnelDomain}</div>
+                            </div>
+                            <button
+                              onClick={() => copyToClipboard(`nslookup ${tunnelDomain}\nping ${tunnelDomain}`, 'dns-check-windows')}
+                              className="p-1 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                            >
+                              {copiedCommand === 'dns-check-windows' ? (
+                                <Check className="h-3 w-3 text-green-600" />
+                              ) : (
+                                <Copy className="h-3 w-3" />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          DNS가 해석되지 않으면 인스턴스 상세 페이지에서 "DNS 강제 재생성" 버튼을 클릭하세요.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        3. 키 파일 설정 (키 페어를 사용하는 경우)
+                      </label>
+                      <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600 space-y-3">
+                        <div>
+                          <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+                            방법 1: PuTTYgen 명령어로 변환 (Linux/WSL/Git Bash)
+                          </p>
+                          <div className="bg-white dark:bg-gray-800 rounded p-2 font-mono text-xs mb-2">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <div>puttygen ~/Downloads/leekey.pem -o ~/Downloads/leekey.ppk</div>
+                                <div className="text-gray-500 dark:text-gray-400 text-xs mt-1"># 또는 절대 경로 사용</div>
+                              </div>
+                              <button
+                                onClick={() => copyToClipboard('puttygen ~/Downloads/leekey.pem -o ~/Downloads/leekey.ppk', 'puttygen-cmd')}
+                                className="p-1 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                              >
+                                {copiedCommand === 'puttygen-cmd' ? (
+                                  <Check className="h-3 w-3 text-green-600" />
+                                ) : (
+                                  <Copy className="h-3 w-3" />
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                            💡 PuTTYgen이 설치되어 있지 않은 경우: <code className="bg-gray-200 dark:bg-gray-600 px-1 rounded">sudo apt install putty-tools</code> (Ubuntu/Debian)
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+                            방법 2: PuTTYgen GUI로 변환 (Windows)
+                          </p>
+                          <ol className="list-decimal list-inside space-y-1 text-xs text-gray-900 dark:text-gray-100">
+                            <li>PuTTYgen 실행 (PuTTY 설치 폴더에 포함되어 있음)</li>
+                            <li><strong>"Conversions"</strong> → <strong>"Import key"</strong> 클릭</li>
+                            <li>.pem 파일 선택 (파일 형식: "All Files (*.*)")</li>
+                            <li><strong>"Save private key"</strong> 클릭</li>
+                            <li>.ppk 파일로 저장 (예: leekey.ppk)</li>
+                          </ol>
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">
+                            방법 3: PuTTY에서 직접 사용
+                          </p>
+                          <ol className="list-decimal list-inside space-y-1 text-xs text-gray-900 dark:text-gray-100">
+                            <li>PuTTY 창에서 <strong>Connection → SSH → Auth</strong> 메뉴로 이동</li>
+                            <li><strong>"Private key file for authentication"</strong> 섹션에서 <strong>"Browse"</strong> 클릭</li>
+                            <li>.ppk 파일 선택 (변환된 파일 또는 직접 변환)</li>
+                          </ol>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        4. 사용자 이름 설정
+                      </label>
+                      <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+                        <ol className="list-decimal list-inside space-y-2 text-sm text-gray-900 dark:text-gray-100">
+                          <li>PuTTY 창에서 <strong>Connection → Data</strong> 메뉴로 이동</li>
+                          <li><strong>"Auto-login username"</strong> 필드에 입력:</li>
+                        </ol>
+                        <div className="flex items-center justify-between mt-2 bg-white dark:bg-gray-800 px-2 py-1 rounded">
+                          <code className="text-sm text-gray-900 dark:text-gray-100 font-mono">{username}</code>
+                          <button
+                            onClick={() => copyToClipboard(username, 'putty-user')}
+                            className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                          >
+                            {copiedCommand === 'putty-user' ? (
+                              <Check className="h-4 w-4 text-green-600" />
+                            ) : (
+                              <Copy className="h-4 w-4" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        5. 연결 저장 (선택사항)
+                      </label>
+                      <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+                        <ol className="list-decimal list-inside space-y-2 text-sm text-gray-900 dark:text-gray-100">
+                          <li>모든 설정 완료 후 <strong>"Session"</strong> 메뉴로 돌아가기</li>
+                          <li><strong>"Saved Sessions"</strong>에 세션 이름 입력 (예: {instance.name})</li>
+                          <li><strong>"Save"</strong> 클릭하여 설정 저장</li>
+                          <li>다음번에는 저장된 세션 선택 후 <strong>"Load"</strong> → <strong>"Open"</strong>만 클릭하면 됩니다</li>
+                        </ol>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        6. 연결 및 문제 해결
+                      </label>
+                      <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600 space-y-3">
+                        <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded">
+                          <p className="text-sm text-blue-800 dark:text-blue-200 mb-2">
+                            <strong>✅ 연결 방법:</strong>
+                          </p>
+                          <ol className="list-decimal list-inside space-y-1 text-xs text-blue-800 dark:text-blue-200">
+                            <li>모든 설정 완료 후 <strong>"Open"</strong> 버튼 클릭</li>
+                            <li>첫 연결 시 호스트 키 확인 창이 나타나면 <strong>"예"</strong> 또는 <strong>"Accept"</strong> 클릭</li>
+                            <li>비밀번호를 입력하거나 (키 파일 사용 시 자동 로그인)</li>
+                          </ol>
+                        </div>
+                        <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
+                          <p className="text-sm text-red-800 dark:text-red-200 mb-2">
+                            <strong>❌ 연결 오류 해결:</strong>
+                          </p>
+                          <ul className="list-disc list-inside space-y-1 text-xs text-red-800 dark:text-red-200">
+                            <li><strong>"Could not resolve hostname"</strong>: DNS 레코드 재생성 필요 (인스턴스 상세 페이지 참고)</li>
+                            <li><strong>"Network error: Connection timed out"</strong>: Cloudflare Tunnel이 실행 중인지 확인 (인스턴스 콘솔에서 확인)</li>
+                            <li><strong>"Server unexpectedly closed network connection"</strong>: SSH 서비스가 실행 중인지 확인</li>
+                            <li><strong>"No supported authentication methods available"</strong>: 키 파일(.ppk) 경로와 사용자 이름 확인</li>
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                      <p className="text-sm text-green-800 dark:text-green-200 mb-2">
+                        <strong>💡 빠른 연결 팁:</strong>
+                      </p>
+                      <ul className="list-disc list-inside space-y-1 text-xs text-green-800 dark:text-green-200">
+                        <li>설정 완료 후 <strong>"Saved Sessions"</strong>에 저장하여 다음번에 빠르게 연결</li>
+                        <li>연결 문제 발생 시 인스턴스 상세 페이지의 <strong>"SSH 연결 준비 완료하기"</strong> 버튼 클릭</li>
+                        <li>IPv6 문제는 Windows 호스트 파일 편집이 가장 확실한 해결책</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+                )}
+
+                {/* 문제 해결 탭 */}
+                {connectSubTab === 'troubleshoot' && (
+                  <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+                    <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4 flex items-center">
+                      <Info className="h-5 w-5 mr-2" />
+                      문제 해결
+                    </h3>
+                  
+                    <div className="space-y-6">
+                      <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                        <p className="text-sm text-yellow-800 dark:text-yellow-200 font-medium mb-3">
+                          <strong>⚠️ IPv6 연결 문제가 계속되는 경우:</strong>
+                        </p>
+                        <div className="text-sm text-yellow-800 dark:text-yellow-200 space-y-4">
+                          <div>
+                            <p className="font-medium mb-2">방법 1: IPv4 주소 직접 조회 및 사용</p>
+                            <div className="bg-yellow-100 dark:bg-yellow-900 rounded p-3 font-mono text-xs space-y-2">
+                              <div className="flex items-center justify-between">
+                                <code>dig +short {tunnelDomain} A +follow</code>
+                                <button
+                                  onClick={() => copyToClipboard(`dig +short ${tunnelDomain} A +follow`, 'dig-command')}
+                                  className="p-1 text-yellow-700 hover:text-yellow-900 dark:text-yellow-300 dark:hover:text-yellow-100"
+                                >
+                                  {copiedCommand === 'dig-command' ? (
+                                    <Check className="h-3 w-3 text-green-600" />
+                                  ) : (
+                                    <Copy className="h-3 w-3" />
+                                  )}
+                                </button>
+                              </div>
+                              <div className="text-yellow-600 dark:text-yellow-400 text-xs">
+                                # CNAME이 반환되면 다음 명령어로 최종 IPv4 주소 조회:
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <code>dig +short $(dig +short {tunnelDomain} A) A</code>
+                                <button
+                                  onClick={() => copyToClipboard(`dig +short $(dig +short ${tunnelDomain} A) A`, 'dig-final')}
+                                  className="p-1 text-yellow-700 hover:text-yellow-900 dark:text-yellow-300 dark:hover:text-yellow-100"
+                                >
+                                  {copiedCommand === 'dig-final' ? (
+                                    <Check className="h-3 w-3 text-green-600" />
+                                  ) : (
+                                    <Copy className="h-3 w-3" />
+                                  )}
+                                </button>
+                              </div>
+                              <div className="text-yellow-600 dark:text-yellow-400 text-xs mt-2">
+                                # 반환된 IPv4 주소로 직접 연결:
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <code>ssh -i ~/Downloads/leekey.pem {username}@[IPv4주소]</code>
+                                <button
+                                  onClick={() => copyToClipboard(`ssh -i ~/Downloads/leekey.pem ${username}@[IPv4주소를_여기에_입력]`, 'ssh-ipv4')}
+                                  className="p-1 text-yellow-700 hover:text-yellow-900 dark:text-yellow-300 dark:hover:text-yellow-100"
+                                >
+                                  {copiedCommand === 'ssh-ipv4' ? (
+                                    <Check className="h-3 w-3 text-green-600" />
+                                  ) : (
+                                    <Copy className="h-3 w-3" />
+                                  )}
+                                </button>
+                              </div>
+                              <div className="text-yellow-600 dark:text-yellow-400 text-xs mt-2 p-2 bg-yellow-50 dark:bg-yellow-950 rounded">
+                                ⚠️ 참고: Cloudflare Tunnel은 동적 IP를 사용하므로 IP 주소가 자주 변경될 수 있습니다. 방법 2(SSH config)를 권장합니다.
+                              </div>
+                            </div>
+                          </div>
+
+                          <div>
+                            <p className="font-medium mb-2">방법 2: SSH config 파일 사용 (권장)</p>
+                            <div className="bg-yellow-100 dark:bg-yellow-900 rounded p-3 font-mono text-xs">
+                              <div className="flex items-center justify-between mb-1">
+                                <div className="space-y-1">
+                                  <div>Host {tunnelDomain}</div>
+                                  <div>&nbsp;&nbsp;AddressFamily inet</div>
+                                  <div>&nbsp;&nbsp;User {username}</div>
+                                  <div>&nbsp;&nbsp;IdentityFile ~/Downloads/leekey.pem</div>
+                                </div>
+                                <button
+                                  onClick={() => copyToClipboard(`Host ${tunnelDomain}\n    AddressFamily inet\n    User ${username}\n    IdentityFile ~/Downloads/leekey.pem`, 'ssh-config')}
+                                  className="p-1 text-yellow-700 hover:text-yellow-900 dark:text-yellow-300 dark:hover:text-yellow-100 ml-2"
+                                >
+                                  {copiedCommand === 'ssh-config' ? (
+                                    <Check className="h-3 w-3 text-green-600" />
+                                  ) : (
+                                    <Copy className="h-3 w-3" />
+                                  )}
+                                </button>
+                              </div>
+                              <div className="text-yellow-600 dark:text-yellow-400 text-xs mt-2">
+                                # ~/.ssh/config 파일에 위 내용 추가 후: <code className="bg-yellow-200 dark:bg-yellow-800 px-1 rounded">ssh {tunnelDomain}</code>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div>
+                            <p className="font-medium mb-2">방법 3: macOS에서 IPv6 완전 비활성화 (임시)</p>
+                            <div className="bg-yellow-100 dark:bg-yellow-900 rounded p-3 font-mono text-xs">
+                              <div className="flex items-center justify-between">
+                                <code>sudo networksetup -setv6off Wi-Fi</code>
+                                <button
+                                  onClick={() => copyToClipboard('sudo networksetup -setv6off Wi-Fi', 'disable-ipv6')}
+                                  className="p-1 text-yellow-700 hover:text-yellow-900 dark:text-yellow-300 dark:hover:text-yellow-100"
+                                >
+                                  {copiedCommand === 'disable-ipv6' ? (
+                                    <Check className="h-3 w-3 text-green-600" />
+                                  ) : (
+                                    <Copy className="h-3 w-3" />
+                                  )}
+                                </button>
+                              </div>
+                              <div className="text-yellow-600 dark:text-yellow-400 text-xs mt-2">
+                                # IPv6 재활성화: <code className="bg-yellow-200 dark:bg-yellow-800 px-1 rounded">sudo networksetup -setv6automatic Wi-Fi</code>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </div>
       )}
 

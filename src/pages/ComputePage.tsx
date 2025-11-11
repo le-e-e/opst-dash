@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { novaService, neutronService, glanceService, cinderService } from '../services/openstack';
+import { cloudflareService } from '../services/cloudflare';
 import { 
   filterInstancesByProject, 
   isCurrentUserAdmin,
@@ -88,26 +89,59 @@ const ComputePage: React.FC = () => {
   const fetchInstances = async () => {
     try {
       setLoading(true);
-      const [instancesData, flavorsData, imagesData] = await Promise.all([
+      
+      // Promise.allSettled를 사용하여 일부 실패해도 계속 진행
+      // 인스턴스와 플레이버는 필수, 이미지는 선택적
+      const [instancesResult, flavorsResult, imagesResult] = await Promise.allSettled([
         novaService.getServers(),
         novaService.getFlavors(),
         glanceService.getImages()
       ]);
       
-      // 프로젝트별 필터링 적용
-      const allInstances = instancesData.servers || [];
-      const filteredInstances = filterInstancesByProject(allInstances);
+      // 인스턴스 데이터 (필수)
+      if (instancesResult.status === 'fulfilled') {
+        const allInstances = instancesResult.value.servers || [];
+        const filteredInstances = filterInstancesByProject(allInstances);
+        setInstances(filteredInstances);
+        
+        console.log('전체 인스턴스:', allInstances.length, '필터링된 인스턴스:', filteredInstances.length);
+      } else {
+        console.error('인스턴스 로딩 실패:', instancesResult.reason);
+        const errorMessage = instancesResult.reason?.response?.data?.error?.message || 
+                           instancesResult.reason?.message || 
+                           '인스턴스 목록을 불러오는데 실패했습니다.';
+        toast.error(errorMessage, { duration: 5000 });
+        setInstances([]);
+      }
       
-      console.log('전체 인스턴스:', allInstances.length, '필터링된 인스턴스:', filteredInstances.length);
-      console.log('현재 사용자가 관리자인가?', isCurrentUserAdmin());
-      console.log('모든 프로젝트 접근 가능한가?', canAccessAllProjects());
+      // 플레이버 데이터 (필수)
+      if (flavorsResult.status === 'fulfilled') {
+        setFlavors(flavorsResult.value.flavors || []);
+      } else {
+        console.error('플레이버 로딩 실패:', flavorsResult.reason);
+        setFlavors([]);
+        // 플레이버는 필수이지만 UI는 계속 표시 가능
+      }
       
-      setInstances(filteredInstances);
-      setFlavors(flavorsData.flavors || []);
-      setImages(imagesData.images || []);
-    } catch (error) {
-      console.error('인스턴스 로딩 실패:', error);
-      toast.error('인스턴스 목록을 불러오는데 실패했습니다.');
+      // 이미지 데이터 (선택적 - 실패해도 계속 진행)
+      if (imagesResult.status === 'fulfilled') {
+        setImages(imagesResult.value.images || []);
+      } else {
+        console.error('이미지 로딩 실패:', imagesResult.reason);
+        // 이미지 로딩 실패는 조용히 처리 (인스턴스 목록은 계속 표시)
+        setImages([]);
+        // 사용자에게는 경고만 표시
+        toast.error('이미지 목록을 불러올 수 없습니다. 인스턴스 목록은 계속 표시됩니다.', {
+          duration: 3000,
+          icon: '⚠️'
+        });
+      }
+    } catch (error: any) {
+      console.error('예상치 못한 오류:', error);
+      toast.error('데이터를 불러오는데 실패했습니다.');
+      setInstances([]);
+      setFlavors([]);
+      setImages([]);
     } finally {
       setLoading(false);
     }
@@ -505,6 +539,30 @@ const ComputePage: React.FC = () => {
         // 추가 안정화 대기
         console.log('⏳ 인스턴스 삭제 전 안정화 대기...');
         await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+      
+      // Cloudflare Tunnel 삭제 (있는 경우)
+      const tunnelId = instance.metadata?.cloudflare_tunnel_id;
+      const tunnelDomain = instance.metadata?.cloudflare_tunnel_domain;
+      
+      if (tunnelId || tunnelDomain) {
+        console.log('\n🌐 Cloudflare Tunnel 삭제 시작...');
+        try {
+          if (tunnelId) {
+            console.log(`   Tunnel ID: ${tunnelId}`);
+            await cloudflareService.deleteTunnel(tunnelId);
+            console.log('   ✅ Tunnel 삭제 완료');
+          }
+          
+          if (tunnelDomain) {
+            console.log(`   DNS 레코드: ${tunnelDomain}`);
+            await cloudflareService.deleteDNSRecord(tunnelDomain);
+            console.log('   ✅ DNS 레코드 삭제 완료');
+          }
+        } catch (tunnelError: any) {
+          console.warn('   ⚠️ Tunnel 삭제 실패 (계속 진행):', tunnelError.message);
+          // Tunnel 삭제 실패해도 인스턴스 삭제는 계속 진행
+        }
       }
       
       // 인스턴스 삭제
@@ -1046,57 +1104,57 @@ const ComputePage: React.FC = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">작업</th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                 {instances.map((instance) => {
                   const ips = getInstanceIPs(instance.addresses);
                   const flavorInfo = getFlavorInfo(instance.flavor?.id || '');
                   
                   return (
-                    <tr key={instance.id} className={`hover:bg-gray-50 transition-colors ${selectedInstances.includes(instance.id) ? 'bg-blue-50' : ''}`}>
+                    <tr key={instance.id} className={`hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${selectedInstances.includes(instance.id) ? 'bg-blue-50 dark:bg-blue-900/30' : ''}`}>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <input
                           type="checkbox"
                           checked={selectedInstances.includes(instance.id)}
                           onChange={() => handleInstanceSelect(instance.id)}
-                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          className="rounded border-gray-300 dark:border-gray-600 text-blue-600 dark:text-blue-400 focus:ring-blue-500 dark:focus:ring-blue-400"
                         />
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">
-                          <Server className="h-5 w-5 text-gray-400 mr-3 flex-shrink-0" />
+                          <Server className="h-5 w-5 text-gray-400 dark:text-gray-500 mr-3 flex-shrink-0" />
                           <div className="min-w-0 flex-1">
                             <button 
                               onClick={() => handleInstanceClick(instance.id)}
-                              className="text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline text-left"
+                              className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 hover:underline text-left"
                             >
                               {instance.name}
                             </button>
-                            <div className="text-xs text-gray-500 truncate">{instance.id}</div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{instance.id}</div>
                           </div>
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">
+                        <div className="text-sm text-gray-900 dark:text-gray-100">
                           {ips.length > 0 ? (
                             <div className="space-y-1">
                               {ips.map((ip, index) => (
                                 <div key={index} className="flex items-center">
-                                  <Network className="h-3 w-3 text-gray-400 mr-1" />
+                                  <Network className="h-3 w-3 text-gray-400 dark:text-gray-500 mr-1" />
                                   <span className="text-xs">{ip}</span>
                                 </div>
                               ))}
                             </div>
                           ) : (
-                            <span className="text-gray-500 text-xs">IP 없음</span>
+                            <span className="text-gray-500 dark:text-gray-400 text-xs">IP 없음</span>
                           )}
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">
+                        <div className="text-sm text-gray-900 dark:text-gray-100">
                           {flavorInfo ? (
                             <div className="space-y-1">
                               <div className="font-medium">{flavorInfo.name}</div>
-                              <div className="text-xs text-gray-500">
+                              <div className="text-xs text-gray-500 dark:text-gray-400">
                                 vCPU: {flavorInfo.vcpus} | RAM: {flavorInfo.ram}MB | Disk: {flavorInfo.disk}GB
                               </div>
                             </div>
@@ -1113,7 +1171,7 @@ const ComputePage: React.FC = () => {
                                             <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <button
                           onClick={() => handleInstanceClick(instance.id)}
-                          className="inline-flex items-center px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg transition-colors"
+                          className="inline-flex items-center px-3 py-1 bg-blue-100 dark:bg-blue-900/50 hover:bg-blue-200 dark:hover:bg-blue-800 text-blue-700 dark:text-blue-300 rounded-lg transition-colors"
                           title="상세 정보"
                         >
                           <Eye className="h-4 w-4 mr-1" />

@@ -80,12 +80,27 @@ const Dashboard: React.FC = () => {
       const imagesData = imagesResult.status === 'fulfilled' ? imagesResult.value : { images: [] };
       const hypervisorData = hypervisorResult.status === 'fulfilled' ? hypervisorResult.value : null;
 
-      // 실패한 API 로깅
-      if (serversResult.status === 'rejected') console.error('서버 데이터 로딩 실패:', serversResult.reason);
-      if (networksResult.status === 'rejected') console.error('네트워크 데이터 로딩 실패:', networksResult.reason);
-      if (volumesResult.status === 'rejected') console.error('볼륨 데이터 로딩 실패:', volumesResult.reason);
-      if (imagesResult.status === 'rejected') console.error('이미지 데이터 로딩 실패:', imagesResult.reason);
-      if (hypervisorResult.status === 'rejected') console.error('하이퍼바이저 데이터 로딩 실패:', hypervisorResult.reason);
+      // 실패한 API 로깅 및 처리
+      if (serversResult.status === 'rejected') {
+        console.error('서버 데이터 로딩 실패:', serversResult.reason);
+      }
+      if (networksResult.status === 'rejected') {
+        console.error('네트워크 데이터 로딩 실패:', networksResult.reason);
+      }
+      if (volumesResult.status === 'rejected') {
+        console.error('볼륨 데이터 로딩 실패:', volumesResult.reason);
+      }
+      if (imagesResult.status === 'rejected') {
+        const error = imagesResult.reason;
+        console.error('이미지 데이터 로딩 실패:', error);
+        // HTTP 300 응답은 리다이렉트 문제일 수 있음
+        if (error?.response?.status === 300) {
+          console.warn('이미지 API가 300 리다이렉트 응답을 반환했습니다. API 엔드포인트나 파라미터를 확인하세요.');
+        }
+      }
+      if (hypervisorResult.status === 'rejected') {
+        console.error('하이퍼바이저 데이터 로딩 실패:', hypervisorResult.reason);
+      }
 
       // 서버 상태 계산
       const servers = serversData.servers || [];
@@ -351,18 +366,18 @@ const Dashboard: React.FC = () => {
         <div className="card p-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">메모리 사용률</p>
-              <p className="text-2xl font-bold text-gray-900">{stats?.usage.memory}%</p>
-              <p className="text-sm text-gray-500">
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-400">메모리 사용률</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{stats?.usage.memory}%</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
                 {Math.round((stats?.hypervisor.memoryUsed || 0) / 1024)}GB / {Math.round((stats?.hypervisor.memoryTotal || 0) / 1024)}GB
               </p>
             </div>
-            <div className="bg-pink-50 p-3 rounded-lg">
-              <Database className="h-8 w-8 text-pink-600" />
+            <div className="bg-pink-50 dark:bg-pink-900/30 p-3 rounded-lg">
+              <Database className="h-8 w-8 text-pink-600 dark:text-pink-400" />
             </div>
           </div>
           <div className="mt-3">
-            <div className="w-full bg-gray-200 rounded-full h-2">
+            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                              <div 
                  className={`h-2 rounded-full ${(stats?.usage.memory || 0) > 80 ? 'bg-red-500' : (stats?.usage.memory || 0) > 60 ? 'bg-yellow-500' : 'bg-green-500'}`}
                  style={{ width: `${stats?.usage.memory || 0}%` }}
@@ -374,18 +389,18 @@ const Dashboard: React.FC = () => {
          <div className="card p-6">
            <div className="flex items-center justify-between">
              <div>
-               <p className="text-sm font-medium text-gray-600">스토리지 사용률</p>
-               <p className="text-2xl font-bold text-gray-900">{stats?.usage.storage}%</p>
-               <p className="text-sm text-gray-500">
+               <p className="text-sm font-medium text-gray-600 dark:text-gray-400">스토리지 사용률</p>
+               <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{stats?.usage.storage}%</p>
+               <p className="text-sm text-gray-500 dark:text-gray-400">
                  {stats?.hypervisor.diskUsed}GB / {stats?.hypervisor.diskTotal}GB
                </p>
              </div>
-             <div className="bg-teal-50 p-3 rounded-lg">
-               <HardDrive className="h-8 w-8 text-teal-600" />
+             <div className="bg-teal-50 dark:bg-teal-900/30 p-3 rounded-lg">
+               <HardDrive className="h-8 w-8 text-teal-600 dark:text-teal-400" />
              </div>
            </div>
            <div className="mt-3">
-             <div className="w-full bg-gray-200 rounded-full h-2">
+             <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                <div 
                  className={`h-2 rounded-full ${(stats?.usage.storage || 0) > 80 ? 'bg-red-500' : (stats?.usage.storage || 0) > 60 ? 'bg-yellow-500' : 'bg-green-500'}`}
                  style={{ width: `${stats?.usage.storage || 0}%` }}

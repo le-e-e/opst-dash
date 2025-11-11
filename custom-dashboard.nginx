@@ -1,0 +1,323 @@
+# 메인 도메인 (대시보드 및 API)
+server {
+    listen 8080;
+    server_name leee.cloud www.leee.cloud;
+
+    # 커스텀 대시보드 프론트엔드 (개발 서버 또는 빌드된 파일)
+    location / {
+        # 개발 환경: Vite 개발 서버 (포트 3000)
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+
+        # WebSocket 연결에 필요한 헤더 (Vite HMR용)
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # 또는 프로덕션: 빌드된 정적 파일을 서빙하는 경우
+        # root /home/lee/opst-dash/dist;
+        # index index.html;
+        # try_files $uri $uri/ /index.html;
+    }
+
+    # ========================
+    # OpenStack API 프록시
+    # 프론트엔드 경로와 일치하도록 설정
+    # ========================
+
+    # Keystone (Identity) - /keystone 경로 사용
+    location /keystone {
+        proxy_pass http://192.168.0.25:5000/v3;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # CORS 헤더
+        add_header Access-Control-Allow-Origin * always;
+        add_header Access-Control-Allow-Methods 'GET, POST, PUT, DELETE, OPTIONS, HEAD' always;
+        add_header Access-Control-Allow-Headers 'Authorization, Content-Type, X-Auth-Token, X-Subject-Token' always;
+        
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+    }
+
+    # Nova (Compute) - /nova 경로 사용
+    location /nova {
+        proxy_pass http://192.168.0.25:8774/v2.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # CORS 헤더
+        add_header Access-Control-Allow-Origin * always;
+        add_header Access-Control-Allow-Methods 'GET, POST, PUT, DELETE, OPTIONS, HEAD' always;
+        add_header Access-Control-Allow-Headers 'Authorization, Content-Type, X-Auth-Token' always;
+        
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+    }
+
+    # Neutron (Network) - /neutron 경로 사용
+    location /neutron {
+        proxy_pass http://192.168.0.25:9696;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # CORS 헤더
+        add_header Access-Control-Allow-Origin * always;
+        add_header Access-Control-Allow-Methods 'GET, POST, PUT, DELETE, OPTIONS, HEAD' always;
+        add_header Access-Control-Allow-Headers 'Authorization, Content-Type, X-Auth-Token' always;
+        
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+    }
+
+    # Glance (Image) - /glance 경로 사용
+    location /glance {
+        # Glance API는 /v2 경로를 사용하므로 /glance 접두사를 제거
+        rewrite ^/glance/(.*)$ /$1 break;
+        rewrite ^/glance$ /v2 break;
+        proxy_pass http://192.168.0.25:9292;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # CORS 헤더
+        add_header Access-Control-Allow-Origin * always;
+        add_header Access-Control-Allow-Methods 'GET, POST, PUT, DELETE, OPTIONS, HEAD' always;
+        add_header Access-Control-Allow-Headers 'Authorization, Content-Type, X-Auth-Token, Accept, X-Image-Meta-Protocol' always;
+        
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+    }
+
+    # Cinder (Block Storage) - /cinder 경로 사용
+    location /cinder {
+        proxy_pass http://192.168.0.25:8776;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # CORS 헤더
+        add_header Access-Control-Allow-Origin * always;
+        add_header Access-Control-Allow-Methods 'GET, POST, PUT, DELETE, OPTIONS, HEAD' always;
+        add_header Access-Control-Allow-Headers 'Authorization, Content-Type, X-Auth-Token' always;
+        
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+    }
+
+    # Placement - /placement 경로 사용
+    location /placement {
+        proxy_pass http://192.168.0.25:8780;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # CORS 헤더
+        add_header Access-Control-Allow-Origin * always;
+        add_header Access-Control-Allow-Methods 'GET, POST, PUT, DELETE, OPTIONS, HEAD' always;
+        add_header Access-Control-Allow-Headers 'Authorization, Content-Type, X-Auth-Token' always;
+        
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+    }
+
+    # ========================
+    # VNC 콘솔 프록시
+    # ========================
+
+    # noVNC 정적 파일과 HTML
+    location /novnc/ {
+        proxy_pass http://192.168.0.25:6080/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600;
+        
+        # X-Frame-Options 헤더 제거 (iframe에서 로드 가능하도록)
+        proxy_hide_header X-Frame-Options;
+        
+        # CORS 헤더 추가
+        add_header 'Access-Control-Allow-Origin' '*' always;
+        add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
+        add_header 'Access-Control-Allow-Headers' 'DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range' always;
+        add_header 'Access-Control-Expose-Headers' 'Content-Length,Content-Range' always;
+        
+        # OPTIONS 요청 처리
+        if ($request_method = 'OPTIONS') {
+            add_header 'Access-Control-Allow-Origin' '*';
+            add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS';
+            add_header 'Access-Control-Allow-Headers' 'DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range';
+            add_header 'Access-Control-Max-Age' 1728000;
+            add_header 'Content-Type' 'text/plain; charset=utf-8';
+            add_header 'Content-Length' 0;
+            return 204;
+        }
+    }
+
+    # WebSocket 프록시 (websockify) - 필수 설정!
+    # 쿼리 파라미터(?token=xxx)를 포함한 요청을 처리
+    location /websockify {
+        # 쿼리 파라미터를 포함하여 전달 (중요!)
+        proxy_pass http://192.168.0.25:6080/websockify$is_args$args;
+        proxy_http_version 1.1;
+        
+        # WebSocket 업그레이드 헤더 (필수!)
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # 프록시 헤더
+        # Host는 백엔드 websockify 서버 주소로 설정 (websockify가 Host 기반 인증 사용)
+        proxy_set_header Host 192.168.0.25:6080;
+        proxy_set_header Origin "http://192.168.0.25:6080";
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        
+        # WebSocket 프록시 디버깅 (실제 요청 정보 전달)
+        proxy_set_header X-Forwarded-URI $request_uri;
+        
+        # WebSocket 타임아웃 설정 (24시간 - VNC 세션 유지)
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+        proxy_connect_timeout 86400;
+        
+        # WebSocket 연결 유지 강화
+        tcp_nodelay on;
+        tcp_nopush off;
+        
+        # 버퍼링 비활성화 (WebSocket에 필수)
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_request_buffering off;
+        
+        # 연결 유지
+        keepalive_timeout 86400;
+        
+        # WebSocket 연결 성공 로깅
+        access_log /var/log/nginx/websockify-access.log;
+        error_log /var/log/nginx/websockify-error.log;
+        
+        # CORS 헤더 (WebSocket에는 필요 없지만 안전을 위해)
+        add_header 'Access-Control-Allow-Origin' '*' always;
+        
+        # OPTIONS 요청 처리
+        if ($request_method = 'OPTIONS') {
+            add_header 'Access-Control-Allow-Origin' '*';
+            add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS';
+            add_header 'Access-Control-Allow-Headers' 'DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range';
+            add_header 'Access-Control-Max-Age' 1728000;
+            add_header 'Content-Type' 'text/plain; charset=utf-8';
+            add_header 'Content-Length' 0;
+            return 204;
+        }
+    }
+
+    # 클라이언트 최대 업로드 크기
+    client_max_body_size 100M;
+}
+
+# VNC 서브도메인 (WebSocket 전용, Cloudflare DNS only로 설정)
+server {
+    listen 8080;
+    server_name vnc.leee.cloud;
+    
+    # 로그 설정
+    access_log /var/log/nginx/vnc-access.log;
+    error_log /var/log/nginx/vnc-error.log;
+    
+    # noVNC 정적 파일과 HTML
+    location /novnc/ {
+        proxy_pass http://192.168.0.25:6080/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600;
+        
+        # X-Frame-Options 헤더 제거 (iframe에서 로드 가능하도록)
+        proxy_hide_header X-Frame-Options;
+        
+        # CORS 헤더 추가
+        add_header 'Access-Control-Allow-Origin' '*' always;
+        
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+    }
+    
+    # WebSocket 프록시 (websockify) - 직접 연결
+    location /websockify {
+        # 쿼리 파라미터를 포함하여 전달 (중요!)
+        proxy_pass http://192.168.0.25:6080/websockify$is_args$args;
+        proxy_http_version 1.1;
+        
+        # WebSocket 업그레이드 헤더 (필수!)
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # 프록시 헤더
+        # Host는 websockify 서버 주소로 설정
+        proxy_set_header Host 192.168.0.25:6080;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # WebSocket 타임아웃 설정 (24시간 - VNC 세션 유지)
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+        proxy_connect_timeout 60;
+        
+        # 버퍼링 비활성화 (WebSocket에 필수)
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_request_buffering off;
+        
+        # 연결 유지
+        keepalive_timeout 86400;
+        
+        # WebSocket 연결 성공 로깅
+        access_log /var/log/nginx/websockify-access.log;
+        error_log /var/log/nginx/websockify-error.log;
+        
+        # CORS 헤더
+        add_header 'Access-Control-Allow-Origin' '*' always;
+        
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+    }
+    
+    # 루트 경로는 404 (VNC 전용 서브도메인)
+    location / {
+        return 404;
+    }
+}
+
