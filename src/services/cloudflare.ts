@@ -353,13 +353,13 @@ export class CloudflareService {
         }
       }
 
-      // DNS 레코드 생성 (CNAME)
+      // DNS 레코드 생성 (CNAME, proxied=true로 IPv4/IPv6 dual stack 지원)
       const response = await this.makeRequest(`/zones/${this.config.zoneId}/dns_records`, 'POST', {
         type: 'CNAME',
         name: hostname,
         content: `${tunnelId}.cfargotunnel.com`,
         ttl: 1, // 자동 TTL (Cloudflare가 최적값으로 조정)
-        proxied: false // SSH는 프록시하지 않음
+        proxied: true // Cloudflare 프록시를 통해 IPv4/IPv6 dual stack 지원
       });
 
       if (!response.success) {
