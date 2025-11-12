@@ -1221,7 +1221,27 @@ const InstanceDetailPage: React.FC = () => {
             }
 
             const tunnelDomain = instance?.metadata?.cloudflare_tunnel_domain;
-            const username = 'ubuntu'; // 기본 사용자명 (Ubuntu 이미지 기준)
+            
+            // 이미지 이름 기반으로 사용자명 자동 감지
+            const getDefaultUsername = (imageName?: string): string => {
+              if (!imageName) return 'ubuntu'; // 기본값
+              
+              const name = imageName.toLowerCase();
+              if (name.includes('ubuntu') || name.includes('debian')) {
+                return 'ubuntu';
+              } else if (name.includes('centos') || name.includes('rhel') || name.includes('rocky') || name.includes('almalinux')) {
+                return 'centos';
+              } else if (name.includes('fedora')) {
+                return 'fedora';
+              } else if (name.includes('opensuse') || name.includes('suse')) {
+                return 'opensuse';
+              } else if (name.includes('alpine')) {
+                return 'alpine';
+              }
+              return 'ubuntu'; // 기본값
+            };
+            
+            const username = getDefaultUsername(image?.name);
             
             if (!tunnelDomain) {
               return (
@@ -1475,21 +1495,56 @@ const InstanceDetailPage: React.FC = () => {
                                 <div className="mb-3">
                                   <div className="text-xs font-semibold text-red-800 dark:text-red-200 mb-1">🔍 먼저 상태 확인 (복사해서 실행):</div>
                                   <div className="bg-red-50 dark:bg-red-950 rounded p-2 font-mono text-xs mb-2">
-                                    <div className="mb-1"># Cloudflare Tunnel 서비스 상태 확인</div>
+                                    <div className="mb-1"># 1. cloud-init 스크립트 파일 존재 확인</div>
+                                    <div className="mb-1">ls -la /usr/local/bin/setup-cloudflare-tunnel.sh 2&gt;/dev/null && echo "✅ 스크립트 파일 있음" || echo "❌ 스크립트 파일 없음"</div>
+                                    <div className="mb-1"># 2. cloud-init 로그 확인 (user_data 실행 여부)</div>
+                                    <div className="mb-1">sudo cat /var/log/cloud-init.log | grep -i "cloudflare\|setup-cloudflare\|runcmd" | tail -20</div>
+                                    <div className="mb-1"># 3. cloud-init 출력 로그 확인</div>
+                                    <div className="mb-1">sudo cat /var/log/cloud-init-output.log | tail -50</div>
+                                    <div className="mb-1"># 4. cloud-init 스크립트 실행 여부 확인</div>
+                                    <div className="mb-1">ls -la /var/log/cloudflare-tunnel-script-executed 2&gt;/dev/null && echo "✅ 스크립트 실행됨" || echo "❌ 스크립트 실행 안됨"</div>
+                                    <div className="mb-1"># 5. 스크립트 실행 로그 확인</div>
+                                    <div className="mb-1">cat /var/log/cloudflare-tunnel-setup.log 2&gt;/dev/null || echo "로그 파일 없음"</div>
+                                    <div className="mb-1"># 6. Cloudflare Tunnel 서비스 상태 확인</div>
                                     <div className="mb-1">systemctl status cloudflared-tunnel</div>
-                                    <div className="mb-1"># 최근 로그 확인</div>
-                                    <div className="mb-1">journalctl -u cloudflared-tunnel -n 50 --no-pager</div>
-                                    <div className="mb-1"># config.yml 파일 확인</div>
-                                    <div className="mb-1">cat /etc/cloudflared/config.yml</div>
-                                    <div className="mb-1"># SSH 서비스 상태 확인</div>
-                                    <div>systemctl status ssh || systemctl status sshd</div>
+                                    <div className="mb-1"># 7. cloudflared 설치 확인</div>
+                                    <div className="mb-1">which cloudflared && cloudflared version || echo "cloudflared 미설치"</div>
+                                    <div className="mb-1"># 8. user_data 확인 (메타데이터 서버에서)</div>
+                                    <div>curl -s http://169.254.169.254/latest/user-data | head -20</div>
                                   </div>
                                   <button
                                     onClick={() => {
-                                      const command = `systemctl status cloudflared-tunnel
-journalctl -u cloudflared-tunnel -n 50 --no-pager
-cat /etc/cloudflared/config.yml
-systemctl status ssh || systemctl status sshd`;
+                                      const command = `# Cloudflare Tunnel 진단 스크립트
+echo "=== 1. 스크립트 파일 존재 확인 ==="
+ls -la /usr/local/bin/setup-cloudflare-tunnel.sh 2>/dev/null && echo "✅ 스크립트 파일 있음" || echo "❌ 스크립트 파일 없음"
+
+echo ""
+echo "=== 2. cloud-init 로그 확인 (user_data 실행 여부) ==="
+sudo cat /var/log/cloud-init.log | grep -i "cloudflare\|setup-cloudflare\|runcmd" | tail -20 || echo "cloud-init 로그에서 관련 내용 없음"
+
+echo ""
+echo "=== 3. cloud-init 출력 로그 확인 ==="
+sudo cat /var/log/cloud-init-output.log | tail -50 || echo "cloud-init 출력 로그 없음"
+
+echo ""
+echo "=== 4. 스크립트 실행 여부 확인 ==="
+ls -la /var/log/cloudflare-tunnel-script-executed 2>/dev/null && echo "✅ 스크립트 실행됨" || echo "❌ 스크립트 실행 안됨"
+
+echo ""
+echo "=== 5. 스크립트 실행 로그 ==="
+cat /var/log/cloudflare-tunnel-setup.log 2>/dev/null || echo "로그 파일 없음"
+
+echo ""
+echo "=== 6. Cloudflare Tunnel 서비스 상태 ==="
+systemctl status cloudflared-tunnel || echo "서비스 없음"
+
+echo ""
+echo "=== 7. cloudflared 설치 확인 ==="
+which cloudflared && cloudflared version || echo "cloudflared 미설치"
+
+echo ""
+echo "=== 8. user_data 확인 (메타데이터 서버) ==="
+curl -s http://169.254.169.254/latest/user-data | head -20 || echo "user_data 조회 실패"`;
                                       copyToClipboard(command, 'diagnose');
                                     }}
                                     className="px-3 py-1.5 bg-gray-600 text-white rounded hover:bg-gray-700 text-xs font-medium mb-2"
@@ -1508,9 +1563,240 @@ systemctl status ssh || systemctl status sshd`;
                                   </button>
                                 </div>
 
+                                {/* Tunnel 완전 수동 설정 */}
+                                <div className="mb-3">
+                                  <div className="text-xs font-semibold text-red-800 dark:text-red-200 mb-1">🔧 Tunnel 완전 수동 설정 (토큰 포함):</div>
+                                  <div className="bg-red-50 dark:bg-red-950 rounded p-2 font-mono text-xs mb-2">
+                                    <div># 1. user_data에서 Tunnel 토큰 추출</div>
+                                    <div>USER_DATA=$(curl -s http://169.254.169.254/latest/user-data)</div>
+                                    <div>TUNNEL_LINE=$(echo "$USER_DATA" | grep "tunnel --token" | head -1)</div>
+                                    <div>TUNNEL_TOKEN=$(echo "$TUNNEL_LINE" | sed 's/.*--token \\([^ ]*\\).*/\\1/')</div>
+                                    <div>echo "토큰 확인: $TUNNEL_TOKEN"</div>
+                                    <div className="mt-2"># 2. cloudflared 설치</div>
+                                    <div>ARCH=$(uname -m); [ "$ARCH" = "x86_64" ] && ARCH="amd64" || ARCH="arm64"</div>
+                                    <div>curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$ARCH -o /usr/local/bin/cloudflared</div>
+                                    <div>chmod +x /usr/local/bin/cloudflared</div>
+                                    <div className="mt-2"># 3. config.yml 생성</div>
+                                    <div>sudo mkdir -p /etc/cloudflared</div>
+                                    <div>sudo tee /etc/cloudflared/config.yml &lt;&lt;EOF</div>
+                                    <div>ingress:</div>
+                                    <div>&nbsp;&nbsp;- hostname: {tunnelDomain}</div>
+                                    <div>&nbsp;&nbsp;&nbsp;&nbsp;service: ssh://localhost:22</div>
+                                    <div>&nbsp;&nbsp;- service: http_status:404</div>
+                                    <div>EOF</div>
+                                    <div>sudo chmod 600 /etc/cloudflared/config.yml</div>
+                                    <div className="mt-2"># 4. systemd 서비스 생성</div>
+                                    <div>sudo tee /etc/systemd/system/cloudflared-tunnel.service &lt;&lt;EOFSERVICE</div>
+                                    <div>[Unit]</div>
+                                    <div>Description=Cloudflare Tunnel</div>
+                                    <div>After=network-online.target</div>
+                                    <div>Wants=network-online.target</div>
+                                    <div>[Service]</div>
+                                    <div>Type=simple</div>
+                                    <div>User=root</div>
+                                    <div>ExecStart=/usr/local/bin/cloudflared tunnel --token $TUNNEL_TOKEN run</div>
+                                    <div>Restart=always</div>
+                                    <div>RestartSec=5</div>
+                                    <div>Environment=CLOUDFLARED_CONFIG=/etc/cloudflared/config.yml</div>
+                                    <div>[Install]</div>
+                                    <div>WantedBy=multi-user.target</div>
+                                    <div>EOFSERVICE</div>
+                                    <div className="mt-2"># 5. 서비스 시작</div>
+                                    <div>sudo systemctl daemon-reload</div>
+                                    <div>sudo systemctl enable cloudflared-tunnel</div>
+                                    <div>sudo systemctl start cloudflared-tunnel</div>
+                                    <div>sudo systemctl status cloudflared-tunnel</div>
+                                  </div>
+                                  <button
+                                    onClick={() => {
+                                      const command = `# Tunnel 완전 수동 설정 스크립트
+# 1. user_data에서 Tunnel 토큰 추출
+USER_DATA=$(curl -s http://169.254.169.254/latest/user-data)
+TUNNEL_LINE=$(echo "$USER_DATA" | grep "tunnel --token" | head -1)
+if [ -z "$TUNNEL_LINE" ]; then
+  echo "❌ Tunnel 토큰을 찾을 수 없습니다. user_data를 확인하세요:"
+  echo "$USER_DATA" | grep -A 5 "ExecStart" || echo "$USER_DATA" | tail -20
+  exit 1
+fi
+TUNNEL_TOKEN=$(echo "$TUNNEL_LINE" | awk '{for(i=1;i<=NF;i++) if($i=="--token") print $(i+1)}')
+if [ -z "$TUNNEL_TOKEN" ]; then
+  echo "❌ 토큰 파싱 실패. 수동으로 확인하세요:"
+  echo "$TUNNEL_LINE"
+  exit 1
+fi
+echo "✅ Tunnel 토큰 발견"
+
+# 2. cloudflared 설치
+ARCH=$(uname -m)
+[ "$ARCH" = "x86_64" ] && ARCH="amd64" || ARCH="arm64"
+echo "cloudflared 다운로드 중... (아키텍처: $ARCH)"
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$ARCH -o /usr/local/bin/cloudflared
+chmod +x /usr/local/bin/cloudflared
+cloudflared version || echo "⚠️ cloudflared 버전 확인 실패"
+
+# 3. config.yml 생성
+sudo mkdir -p /etc/cloudflared
+sudo tee /etc/cloudflared/config.yml > /dev/null <<EOF
+ingress:
+  - hostname: ${tunnelDomain}
+    service: ssh://localhost:22
+  - service: http_status:404
+EOF
+sudo chmod 600 /etc/cloudflared/config.yml
+echo "✅ config.yml 생성 완료"
+
+# 4. systemd 서비스 생성
+sudo tee /etc/systemd/system/cloudflared-tunnel.service > /dev/null <<EOFSERVICE
+[Unit]
+Description=Cloudflare Tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/cloudflared tunnel --token $TUNNEL_TOKEN run
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+Environment=CLOUDFLARED_CONFIG=/etc/cloudflared/config.yml
+
+[Install]
+WantedBy=multi-user.target
+EOFSERVICE
+echo "✅ systemd 서비스 생성 완료"
+
+# 5. 서비스 시작
+sudo systemctl daemon-reload
+sudo systemctl enable cloudflared-tunnel
+sudo systemctl start cloudflared-tunnel
+sleep 3
+sudo systemctl status cloudflared-tunnel
+
+echo ""
+echo "✅ Tunnel 설정 완료!"
+echo "상태 확인: sudo systemctl status cloudflared-tunnel"
+echo "로그 확인: sudo journalctl -u cloudflared-tunnel -f"`;
+                                      copyToClipboard(command, 'manual-setup');
+                                    }}
+                                    className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs font-medium mb-2"
+                                  >
+                                    {copiedCommand === 'manual-setup' ? (
+                                      <span className="flex items-center">
+                                        <Check className="h-3 w-3 mr-1" />
+                                        복사됨
+                                      </span>
+                                    ) : (
+                                      <span className="flex items-center">
+                                        <Copy className="h-3 w-3 mr-1" />
+                                        완전 수동 설정 스크립트 복사
+                                      </span>
+                                    )}
+                                  </button>
+                                </div>
+
+                                {/* Tunnel 활성화 스크립트 (가장 중요!) */}
+                                <div className="mb-3">
+                                  <div className="text-xs font-semibold text-red-800 dark:text-red-200 mb-1">🚨 Tunnel 활성화 (가장 중요! - Tunnel이 inactive인 경우):</div>
+                                  <div className="bg-red-50 dark:bg-red-950 rounded p-2 font-mono text-xs mb-2">
+                                    <div># 1. cloudflared 설치 확인 및 설치</div>
+                                    <div>ARCH=$(uname -m)</div>
+                                    <div>[ "$ARCH" = "x86_64" ] && ARCH="amd64" || ARCH="arm64"</div>
+                                    <div>curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$ARCH -o /usr/local/bin/cloudflared</div>
+                                    <div>chmod +x /usr/local/bin/cloudflared</div>
+                                    <div className="mt-2"># 2. config.yml 생성</div>
+                                    <div>sudo mkdir -p /etc/cloudflared</div>
+                                    <div>sudo tee /etc/cloudflared/config.yml &lt;&lt;EOF</div>
+                                    <div>ingress:</div>
+                                    <div>&nbsp;&nbsp;- hostname: {tunnelDomain}</div>
+                                    <div>&nbsp;&nbsp;&nbsp;&nbsp;service: ssh://localhost:22</div>
+                                    <div>&nbsp;&nbsp;- service: http_status:404</div>
+                                    <div>EOF</div>
+                                    <div>sudo chmod 600 /etc/cloudflared/config.yml</div>
+                                    <div className="mt-2"># 3. systemd 서비스 생성 (Tunnel 토큰 필요 - 대시보드에서 확인)</div>
+                                    <div># ⚠️ Tunnel 토큰은 인스턴스 생성 시에만 제공되므로,</div>
+                                    <div>#    기존 인스턴스는 Tunnel을 재생성해야 합니다.</div>
+                                    <div className="mt-2"># 4. 서비스 시작</div>
+                                    <div>sudo systemctl daemon-reload</div>
+                                    <div>sudo systemctl enable cloudflared-tunnel</div>
+                                    <div>sudo systemctl start cloudflared-tunnel</div>
+                                    <div>sudo systemctl status cloudflared-tunnel</div>
+                                  </div>
+                                  <div className="bg-yellow-50 dark:bg-yellow-900/20 rounded p-2 mb-2 border border-yellow-200 dark:border-yellow-800">
+                                    <p className="text-xs text-yellow-800 dark:text-yellow-200 font-semibold mb-1">
+                                      ⚠️ 중요: Tunnel 토큰이 필요합니다!
+                                    </p>
+                                    <p className="text-xs text-yellow-700 dark:text-yellow-300">
+                                      기존 인스턴스의 경우 Tunnel 토큰이 없을 수 있습니다.
+                                      <br />
+                                      <strong>해결 방법:</strong> 인스턴스를 삭제하고 Cloudflare Tunnel 옵션을 활성화한 상태로 다시 생성하세요.
+                                      <br />
+                                      또는 인스턴스 메타데이터에 Tunnel 토큰이 저장되어 있는지 확인하세요.
+                                    </p>
+                                  </div>
+                                  <button
+                                    onClick={() => {
+                                      const command = `# cloudflared 설치
+ARCH=$(uname -m)
+[ "$ARCH" = "x86_64" ] && ARCH="amd64" || ARCH="arm64"
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$ARCH -o /usr/local/bin/cloudflared
+chmod +x /usr/local/bin/cloudflared
+
+# config.yml 생성
+sudo mkdir -p /etc/cloudflared
+sudo tee /etc/cloudflared/config.yml > /dev/null <<EOF
+ingress:
+  - hostname: ${tunnelDomain}
+    service: ssh://localhost:22
+  - service: http_status:404
+EOF
+sudo chmod 600 /etc/cloudflared/config.yml
+
+# systemd 서비스 생성 (Tunnel 토큰 필요)
+# ⚠️ Tunnel 토큰은 대시보드에서 확인하거나 인스턴스 메타데이터에서 확인하세요
+# sudo tee /etc/systemd/system/cloudflared-tunnel.service > /dev/null <<EOFSERVICE
+# [Unit]
+# Description=Cloudflare Tunnel
+# After=network-online.target
+# Wants=network-online.target
+# [Service]
+# Type=simple
+# User=root
+# ExecStart=/usr/local/bin/cloudflared tunnel --token YOUR_TUNNEL_TOKEN run
+# Restart=always
+# RestartSec=5
+# Environment=CLOUDFLARED_CONFIG=/etc/cloudflared/config.yml
+# [Install]
+# WantedBy=multi-user.target
+# EOFSERVICE
+
+# 서비스 시작
+sudo systemctl daemon-reload
+sudo systemctl enable cloudflared-tunnel
+sudo systemctl start cloudflared-tunnel
+sudo systemctl status cloudflared-tunnel`;
+                                      copyToClipboard(command, 'fix-tunnel-activate');
+                                    }}
+                                    className="px-3 py-1.5 bg-red-600 text-white rounded hover:bg-red-700 text-xs font-medium"
+                                  >
+                                    {copiedCommand === 'fix-tunnel-activate' ? (
+                                      <span className="flex items-center">
+                                        <Check className="h-3 w-3 mr-1" />
+                                        복사됨
+                                      </span>
+                                    ) : (
+                                      <span className="flex items-center">
+                                        <Copy className="h-3 w-3 mr-1" />
+                                        Tunnel 활성화 스크립트 복사
+                                      </span>
+                                    )}
+                                  </button>
+                                </div>
+
                                 {/* config.yml 생성 명령어 */}
                                 <div className="mb-3">
-                                  <div className="text-xs font-semibold text-red-800 dark:text-red-200 mb-1">⚙️ config.yml 파일 생성/수정 (중요!):</div>
+                                  <div className="text-xs font-semibold text-red-800 dark:text-red-200 mb-1">⚙️ config.yml 파일 생성/수정 (Tunnel이 이미 실행 중인 경우):</div>
                                   <div className="bg-red-50 dark:bg-red-950 rounded p-2 font-mono text-xs mb-2">
                                     <div>sudo mkdir -p /etc/cloudflared</div>
                                     <div>sudo tee /etc/cloudflared/config.yml &lt;&lt;EOF</div>
@@ -1839,8 +2125,28 @@ sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`;
                           <p className="text-xs text-yellow-700 dark:text-yellow-300 mb-2">
                             1. 아래의 "권장 방법: SSH Config 파일 설정"을 사용하거나
                           </p>
+                          <p className="text-xs text-yellow-700 dark:text-yellow-300 mb-2">
+                            2. hosts 파일에 IPv4 주소 추가 (가장 확실한 방법):
+                          </p>
+                          <div className="bg-white dark:bg-gray-800 rounded p-2 border border-yellow-200 dark:border-yellow-700 mb-2">
+                            <div className="flex items-center justify-between">
+                              <code className="text-xs text-gray-900 dark:text-gray-100 font-mono flex-1">
+                                echo "172.67.164.152 {tunnelDomain}" | sudo tee -a /etc/hosts
+                              </code>
+                              <button
+                                onClick={() => copyToClipboard(`echo "172.67.164.152 ${tunnelDomain}" | sudo tee -a /etc/hosts`, 'hosts-macos')}
+                                className="ml-2 px-2 py-1 bg-yellow-600 text-white rounded text-xs hover:bg-yellow-700"
+                              >
+                                {copiedCommand === 'hosts-macos' ? (
+                                  <Check className="h-3 w-3" />
+                                ) : (
+                                  <Copy className="h-3 w-3" />
+                                )}
+                              </button>
+                            </div>
+                          </div>
                           <p className="text-xs text-yellow-700 dark:text-yellow-300">
-                            2. "문제 해결" 탭에서 IPv4 주소를 직접 조회하여 사용하세요
+                            3. 또는 "문제 해결" 탭에서 IPv4 주소를 직접 조회하여 사용하세요
                           </p>
                         </div>
                       </div>
@@ -2111,6 +2417,61 @@ sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`;
                       <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
                         <p className="text-sm text-blue-800 dark:text-blue-200">
                           <strong>참고:</strong> Windows 10 버전 1809 이상 또는 Windows 11에서는 OpenSSH 클라이언트가 기본 제공됩니다.
+                        </p>
+                      </div>
+
+                      {/* IPv6 문제 해결: hosts 파일 방법 */}
+                      <div className="mt-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                        <h4 className="text-sm font-semibold text-yellow-800 dark:text-yellow-200 mb-2 flex items-center">
+                          <AlertCircle className="h-4 w-4 mr-2" />
+                          IPv6 연결 오류 해결 방법 (hosts 파일 사용)
+                        </h4>
+                        <p className="text-xs text-yellow-700 dark:text-yellow-300 mb-3">
+                          Cloudflare Tunnel이 IPv6만 반환하는 경우, hosts 파일에 IPv4 주소를 직접 추가하세요:
+                        </p>
+                        <div className="bg-white dark:bg-gray-800 rounded p-3 border border-yellow-200 dark:border-yellow-700 mb-3">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="font-mono text-sm text-gray-900 dark:text-gray-100">
+                              <div>1. 관리자 권한으로 PowerShell 실행</div>
+                              <div className="mt-1">2. hosts 파일 열기:</div>
+                              <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">notepad C:\Windows\System32\drivers\etc\hosts</div>
+                              <div className="mt-2">3. 파일 끝에 추가:</div>
+                              <div className="mt-1 text-green-600 dark:text-green-400 font-semibold">172.67.164.152 {tunnelDomain}</div>
+                              <div className="mt-2">4. 저장 후 DNS 캐시 초기화:</div>
+                              <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">ipconfig /flushdns</div>
+                            </div>
+                            <button
+                              onClick={() => copyToClipboard(`172.67.164.152 ${tunnelDomain}`, 'hosts-entry')}
+                              className="ml-4 px-3 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700"
+                            >
+                              {copiedCommand === 'hosts-entry' ? (
+                                <Check className="h-4 w-4" />
+                              ) : (
+                                <Copy className="h-4 w-4" />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                        <div className="bg-white dark:bg-gray-800 rounded p-3 border border-yellow-200 dark:border-yellow-700">
+                          <p className="text-xs font-semibold text-yellow-800 dark:text-yellow-200 mb-1">한 번에 실행 (PowerShell 관리자 권한):</p>
+                          <div className="flex items-center justify-between">
+                            <code className="text-xs text-gray-900 dark:text-gray-100 font-mono flex-1">
+                              notepad C:\Windows\System32\drivers\etc\hosts; ipconfig /flushdns
+                            </code>
+                            <button
+                              onClick={() => copyToClipboard(`notepad C:\\Windows\\System32\\drivers\\etc\\hosts\n\n# 파일 끝에 다음 줄 추가:\n172.67.164.152 ${tunnelDomain}\n\n# 저장 후 PowerShell에서:\nipconfig /flushdns`, 'hosts-full')}
+                              className="ml-2 px-2 py-1 bg-yellow-600 text-white rounded text-xs hover:bg-yellow-700"
+                            >
+                              {copiedCommand === 'hosts-full' ? (
+                                <Check className="h-3 w-3" />
+                              ) : (
+                                <Copy className="h-3 w-3" />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-3">
+                          💡 hosts 파일에 IPv4 주소를 추가하면 DNS 조회 없이 바로 IPv4로 연결됩니다.
                         </p>
                       </div>
                     </div>
@@ -2395,6 +2756,110 @@ sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder`;
                     </h3>
                   
                     <div className="space-y-6">
+                      {/* SSH 키 인증 문제 */}
+                      <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                        <p className="text-sm text-red-800 dark:text-red-200 font-medium mb-3">
+                          <strong>🔑 "Permission denied (publickey)" 에러 해결:</strong>
+                        </p>
+                        <div className="text-sm text-red-800 dark:text-red-200 space-y-4">
+                          <div>
+                            <p className="font-medium mb-2">1. SSH 키 파일 권한 확인</p>
+                            <div className="bg-red-100 dark:bg-red-900 rounded p-3 font-mono text-xs">
+                              <div className="flex items-center justify-between">
+                                <code>chmod 600 leekey.pem</code>
+                                <button
+                                  onClick={() => copyToClipboard('chmod 600 leekey.pem', 'chmod-key')}
+                                  className="p-1 text-red-700 hover:text-red-900 dark:text-red-300 dark:hover:text-red-100"
+                                >
+                                  {copiedCommand === 'chmod-key' ? (
+                                    <Check className="h-3 w-3 text-green-600" />
+                                  ) : (
+                                    <Copy className="h-3 w-3" />
+                                  )}
+                                </button>
+                              </div>
+                              <div className="text-red-600 dark:text-red-400 text-xs mt-2">
+                                # 키 파일 권한이 600이 아니면 SSH가 거부됩니다
+                              </div>
+                            </div>
+                          </div>
+                          
+                          <div>
+                            <p className="font-medium mb-2">2. 올바른 사용자명 확인</p>
+                            <div className="bg-red-100 dark:bg-red-900 rounded p-3 font-mono text-xs space-y-2">
+                              <div className="text-red-600 dark:text-red-400 text-xs mb-2">
+                                현재 이미지: <strong>{image?.name || '알 수 없음'}</strong>
+                                <br />
+                                추정 사용자명: <strong>{username}</strong>
+                              </div>
+                              <div className="space-y-1">
+                                <div># Ubuntu/Debian: <code className="bg-red-200 dark:bg-red-800 px-1 rounded">ubuntu</code></div>
+                                <div># CentOS/RHEL/Rocky: <code className="bg-red-200 dark:bg-red-800 px-1 rounded">centos</code></div>
+                                <div># Fedora: <code className="bg-red-200 dark:bg-red-800 px-1 rounded">fedora</code></div>
+                                <div># OpenSUSE: <code className="bg-red-200 dark:bg-red-800 px-1 rounded">opensuse</code></div>
+                                <div># Alpine: <code className="bg-red-200 dark:bg-red-800 px-1 rounded">alpine</code></div>
+                              </div>
+                            </div>
+                          </div>
+                          
+                          <div>
+                            <p className="font-medium mb-2">3. 올바른 키 파일 사용 확인</p>
+                            <div className="bg-red-100 dark:bg-red-900 rounded p-3 font-mono text-xs">
+                              <div className="text-red-600 dark:text-red-400 text-xs mb-2">
+                                인스턴스에 등록된 키페어: <strong>{instance?.key_name || '없음'}</strong>
+                              </div>
+                              <div className="text-red-600 dark:text-red-400 text-xs">
+                                # 인스턴스 생성 시 선택한 키페어와 일치하는 키 파일을 사용해야 합니다
+                              </div>
+                            </div>
+                          </div>
+                          
+                          <div>
+                            <p className="font-medium mb-2">4. 올바른 SSH 명령어</p>
+                            <div className="bg-red-100 dark:bg-red-900 rounded p-3 font-mono text-xs space-y-2">
+                              <div className="flex items-center justify-between">
+                                <code>ssh -i leekey.pem {username}@{tunnelDomain}</code>
+                                <button
+                                  onClick={() => copyToClipboard(`ssh -i leekey.pem ${username}@${tunnelDomain}`, 'ssh-correct')}
+                                  className="p-1 text-red-700 hover:text-red-900 dark:text-red-300 dark:hover:text-red-100"
+                                >
+                                  {copiedCommand === 'ssh-correct' ? (
+                                    <Check className="h-3 w-3 text-green-600" />
+                                  ) : (
+                                    <Copy className="h-3 w-3" />
+                                  )}
+                                </button>
+                              </div>
+                              <div className="text-red-600 dark:text-red-400 text-xs mt-2">
+                                # 또는 IPv4 주소 사용: <code className="bg-red-200 dark:bg-red-800 px-1 rounded">ssh -i leekey.pem {username}@[IPv4주소]</code>
+                              </div>
+                            </div>
+                          </div>
+                          
+                          <div>
+                            <p className="font-medium mb-2">5. 디버그 모드로 연결 시도</p>
+                            <div className="bg-red-100 dark:bg-red-900 rounded p-3 font-mono text-xs">
+                              <div className="flex items-center justify-between">
+                                <code>ssh -v -i leekey.pem {username}@{tunnelDomain}</code>
+                                <button
+                                  onClick={() => copyToClipboard(`ssh -v -i leekey.pem ${username}@${tunnelDomain}`, 'ssh-debug')}
+                                  className="p-1 text-red-700 hover:text-red-900 dark:text-red-300 dark:hover:text-red-100"
+                                >
+                                  {copiedCommand === 'ssh-debug' ? (
+                                    <Check className="h-3 w-3 text-green-600" />
+                                  ) : (
+                                    <Copy className="h-3 w-3" />
+                                  )}
+                                </button>
+                              </div>
+                              <div className="text-red-600 dark:text-red-400 text-xs mt-2">
+                                # -v 옵션으로 상세한 디버그 정보를 확인할 수 있습니다
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      
                       <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
                         <p className="text-sm text-yellow-800 dark:text-yellow-200 font-medium mb-3">
                           <strong>⚠️ IPv6 연결 문제가 계속되는 경우:</strong>

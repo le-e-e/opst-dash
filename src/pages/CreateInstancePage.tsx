@@ -722,7 +722,8 @@ const CreateInstancePage: React.FC = () => {
                 try {
                   await novaService.updateServerMetadata(instanceId, {
                     cloudflare_tunnel_domain: tunnelInfo.domain,
-                    cloudflare_tunnel_id: tunnelInfo.tunnelId
+                    cloudflare_tunnel_id: tunnelInfo.tunnelId,
+                    cloudflare_tunnel_token: tunnelInfo.tunnelToken // 토큰도 저장
                   });
                   console.log('✅ Cloudflare Tunnel 메타데이터 저장 성공:', tunnelInfo.domain);
                   metadataSaved = true;

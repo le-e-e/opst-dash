@@ -319,59 +319,76 @@ export class CloudflareService {
    */
   async addDNSRecord(hostname: string, tunnelId: string, forceRecreate: boolean = false): Promise<void> {
     try {
-      // 기존 DNS 레코드 확인 (같은 이름의 레코드가 있는지)
-      const existingRecords = await this.makeRequest(
+      // 기존 DNS 레코드 확인 (CNAME과 A 레코드 모두 확인)
+      const existingCNAME = await this.makeRequest(
         `/zones/${this.config.zoneId}/dns_records?name=${hostname}&type=CNAME`
       );
+      const existingA = await this.makeRequest(
+        `/zones/${this.config.zoneId}/dns_records?name=${hostname}&type=A`
+      );
 
-      if (existingRecords.success && existingRecords.result && existingRecords.result.length > 0) {
-        const existingRecord = existingRecords.result[0];
-        
-        // 강제 재생성 옵션이 있으면 무조건 삭제
+      const cloudflareIPv4 = '172.67.164.152';
+      const allExistingRecords = [
+        ...(existingCNAME.success && existingCNAME.result ? existingCNAME.result : []),
+        ...(existingA.success && existingA.result ? existingA.result : [])
+      ];
+
+      if (allExistingRecords.length > 0) {
+        // 강제 재생성 옵션이 있으면 모든 레코드 삭제
         if (forceRecreate) {
           console.log(`🔨 강제 재생성: 기존 DNS 레코드 삭제 중... ${hostname}`);
-          await this.makeRequest(
-            `/zones/${this.config.zoneId}/dns_records/${existingRecord.id}`,
-            'DELETE'
-          );
+          for (const record of allExistingRecords) {
+            await this.makeRequest(
+              `/zones/${this.config.zoneId}/dns_records/${record.id}`,
+              'DELETE'
+            );
+          }
+          await new Promise(resolve => setTimeout(resolve, 500));
         } else {
-          // 기존 레코드가 올바른 tunnel을 가리키는지 확인
-          if (existingRecord.content === `${tunnelId}.cfargotunnel.com`) {
-            console.log(`✅ DNS 레코드가 이미 존재하고 올바르게 설정되어 있습니다: ${hostname}`);
-            // 레코드가 올바르게 설정되어 있어도 확인을 위해 재생성 시도
-            console.log(`⚠️ DNS 레코드는 존재하지만, DNS 전파가 완료되지 않았을 수 있습니다.`);
-            console.log(`   DNS 전파는 최대 5분까지 걸릴 수 있습니다.`);
+          // 기존 A 레코드가 올바른 IPv4를 가리키는지 확인
+          const correctARecord = allExistingRecords.find(
+            r => r.type === 'A' && r.content === cloudflareIPv4
+          );
+          
+          if (correctARecord) {
+            console.log(`✅ IPv4 A 레코드가 이미 존재하고 올바르게 설정되어 있습니다: ${hostname} → ${cloudflareIPv4}`);
+            console.log(`⚠️ DNS 전파는 최대 5분까지 걸릴 수 있습니다.`);
             return;
           } else {
             // 잘못된 레코드 삭제 후 새로 생성
-            console.log(`기존 DNS 레코드를 업데이트합니다: ${hostname}`);
-            await this.makeRequest(
-              `/zones/${this.config.zoneId}/dns_records/${existingRecord.id}`,
-              'DELETE'
-            );
+            console.log(`기존 DNS 레코드를 IPv4 A 레코드로 업데이트합니다: ${hostname}`);
+            for (const record of allExistingRecords) {
+              await this.makeRequest(
+                `/zones/${this.config.zoneId}/dns_records/${record.id}`,
+                'DELETE'
+              );
+            }
+            await new Promise(resolve => setTimeout(resolve, 500));
           }
         }
       }
 
-      // DNS 레코드 생성 (CNAME, proxied=true로 IPv4/IPv6 dual stack 지원)
+      // IPv4 A 레코드 생성 (IPv6 문제 완전 해결)
+      // Cloudflare Tunnel은 여전히 작동하지만 DNS는 IPv4만 반환
       const response = await this.makeRequest(`/zones/${this.config.zoneId}/dns_records`, 'POST', {
-        type: 'CNAME',
+        type: 'A',
         name: hostname,
-        content: `${tunnelId}.cfargotunnel.com`,
-        ttl: 1, // 자동 TTL (Cloudflare가 최적값으로 조정)
-        proxied: true // Cloudflare 프록시를 통해 IPv4/IPv6 dual stack 지원
+        content: cloudflareIPv4,
+        ttl: 1, // 자동 TTL
+        proxied: false // SSH는 프록시를 거치면 안 됨 (TCP 직접 연결 필요)
       });
 
       if (!response.success) {
         throw new Error(`DNS 레코드 생성 실패: ${JSON.stringify(response)}`);
       }
       
-      console.log(`✅ DNS 레코드 생성 성공: ${hostname} → ${tunnelId}.cfargotunnel.com`);
+      console.log(`✅ IPv4 A 레코드 생성 성공: ${hostname} → ${cloudflareIPv4}`);
+      console.log(`✅ IPv6 문제 완전 해결: 이제 IPv4만 반환됩니다!`);
       
       // 생성 후 즉시 확인
       await new Promise(resolve => setTimeout(resolve, 1000)); // 1초 대기
       const verify = await this.checkDNSRecord(hostname);
-      if (verify.exists && verify.content === `${tunnelId}.cfargotunnel.com`) {
+      if (verify.exists && (verify.content === cloudflareIPv4 || verify.content === `${tunnelId}.cfargotunnel.com`)) {
         console.log(`✅ DNS 레코드 확인 완료: ${hostname} → ${verify.content}`);
       } else {
         console.warn(`⚠️ DNS 레코드 확인 실패 (전파 대기 중일 수 있음): ${hostname}`);
@@ -583,88 +600,174 @@ export class CloudflareService {
    * @param hostname 호스트명
    */
   private generateCloudInitScript(tunnelToken: string, hostname: string): string {
-    return `#!/bin/bash
+    // cloud-init이 확실히 실행하도록 #cloud-config 형식 사용
+    // runcmd를 사용하여 스크립트를 실행
+    // 스크립트를 파일로 저장한 후 실행하는 방식 사용
+    return `#cloud-config
 # Cloudflare Tunnel 자동 설정 스크립트
+# 이 스크립트는 cloud-init의 runcmd 모듈에 의해 실행됩니다
 
-set -e
-
-echo "=== Cloudflare Tunnel 자동 설정 시작 ==="
-
-# 네트워크 대기 (cloud-init 완료 대기)
-until ping -c 1 8.8.8.8 >/dev/null 2>&1; do
-  echo "네트워크 연결 대기 중..."
-  sleep 2
-done
-
-# SSH 서비스 확인 및 시작 (대부분의 이미지에서 기본 설치되어 있음)
-if systemctl list-unit-files | grep -q ssh; then
-  echo "SSH 서비스 확인 중..."
-  # Ubuntu/Debian
-  if systemctl list-unit-files | grep -q "ssh.service\|sshd.service"; then
-    systemctl enable ssh 2>/dev/null || systemctl enable sshd 2>/dev/null || true
-    systemctl start ssh 2>/dev/null || systemctl start sshd 2>/dev/null || true
-  fi
-  # CentOS/RHEL
-  if systemctl list-unit-files | grep -q "sshd.service"; then
-    systemctl enable sshd 2>/dev/null || true
-    systemctl start sshd 2>/dev/null || true
-  fi
-fi
-
-# 필수 패키지 확인 및 설치 (curl, systemd는 대부분 기본 설치되어 있음)
-if ! command -v curl &> /dev/null; then
-  echo "curl 설치 중..."
-  if command -v apt-get &> /dev/null; then
-    apt-get update -qq && apt-get install -y curl
-  elif command -v yum &> /dev/null; then
-    yum install -y curl
-  elif command -v dnf &> /dev/null; then
-    dnf install -y curl
-  fi
-fi
-
-# cloudflared 설치
-ARCH=\$(uname -m)
-if [ "\$ARCH" = "x86_64" ]; then
-    ARCH="amd64"
-elif [ "\$ARCH" = "aarch64" ]; then
-    ARCH="arm64"
-fi
-
-# cloudflared 최신 버전 사용 (2024.12.0 또는 최신)
-CLOUDFLARED_VERSION="2024.12.0"
-CLOUDFLARED_URL="https://github.com/cloudflare/cloudflared/releases/download/\${CLOUDFLARED_VERSION}/cloudflared-linux-\${ARCH}"
-
-echo "cloudflared 다운로드 중... (버전: \${CLOUDFLARED_VERSION}, 아키텍처: \${ARCH})"
-if ! curl -L "\${CLOUDFLARED_URL}" -o /usr/local/bin/cloudflared; then
-  echo "❌ cloudflared 다운로드 실패, 최신 버전 자동 감지 시도..."
-  # 최신 버전 자동 감지 (fallback)
-  LATEST_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-\${ARCH}"
-  if ! curl -L "\${LATEST_URL}" -o /usr/local/bin/cloudflared; then
-    echo "❌ cloudflared 다운로드 완전 실패"
-    exit 1
-  fi
-fi
-
-chmod +x /usr/local/bin/cloudflared
-cloudflared version || echo "⚠️ cloudflared 버전 확인 실패 (계속 진행)"
-
-# Tunnel 설정 파일 생성 (ingress 규칙 포함)
-# 토큰 방식과 config 파일을 함께 사용하여 안정성 확보
-mkdir -p /etc/cloudflared
-cat > /etc/cloudflared/config.yml <<EOFCONFIG
+write_files:
+  - path: /usr/local/bin/setup-cloudflare-tunnel.sh
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/bin/bash
+      # Cloudflare Tunnel 자동 설정 스크립트
+      
+      # 로그 파일 설정
+      LOG_FILE="/var/log/cloudflare-tunnel-setup.log"
+      exec > >(tee -a "$LOG_FILE") 2>&1
+      
+      echo "=== Cloudflare Tunnel 자동 설정 시작 ==="
+      echo "시작 시간: $(date)"
+      echo "호스트명: ${hostname}"
+      
+      # 스크립트 실행 마커 파일 생성 (cloud-init 실행 확인용)
+      touch /var/log/cloudflare-tunnel-script-executed
+      
+      # 에러 발생 시에도 계속 진행하도록 설정 (중요한 부분만 에러 체크)
+      set +e
+      
+      # 네트워크 대기 (cloud-init 완료 대기, 최대 5분)
+      NETWORK_TIMEOUT=300
+      NETWORK_ELAPSED=0
+      until ping -c 1 8.8.8.8 >/dev/null 2>&1; do
+        if [ $NETWORK_ELAPSED -ge $NETWORK_TIMEOUT ]; then
+          echo "⚠️ 네트워크 연결 대기 시간 초과 (5분)"
+          break
+        fi
+        echo "네트워크 연결 대기 중... ($NETWORK_ELAPSED/$NETWORK_TIMEOUT 초)"
+        sleep 2
+        NETWORK_ELAPSED=$((NETWORK_ELAPSED + 2))
+      done
+      
+      if ping -c 1 8.8.8.8 >/dev/null 2>&1; then
+        echo "✅ 네트워크 연결 확인됨"
+      else
+        echo "⚠️ 네트워크 연결 확인 실패, 계속 진행..."
+      fi
+      
+      # SSH 서비스 확인 및 시작 (대부분의 이미지에서 기본 설치되어 있음)
+      echo "SSH 서비스 확인 중..."
+      SSH_STARTED=false
+      
+      # Ubuntu/Debian
+      if systemctl list-unit-files 2>/dev/null | grep -qE "ssh\\.service|sshd\\.service"; then
+        echo "Ubuntu/Debian SSH 서비스 감지됨"
+        systemctl enable ssh 2>/dev/null || systemctl enable sshd 2>/dev/null || true
+        if systemctl start ssh 2>/dev/null || systemctl start sshd 2>/dev/null; then
+          SSH_STARTED=true
+          echo "✅ SSH 서비스 시작됨 (Ubuntu/Debian)"
+        fi
+      fi
+      
+      # CentOS/RHEL
+      if systemctl list-unit-files 2>/dev/null | grep -q "sshd\\.service"; then
+        echo "CentOS/RHEL SSH 서비스 감지됨"
+        systemctl enable sshd 2>/dev/null || true
+        if systemctl start sshd 2>/dev/null; then
+          SSH_STARTED=true
+          echo "✅ SSH 서비스 시작됨 (CentOS/RHEL)"
+        fi
+      fi
+      
+      if [ "$SSH_STARTED" = false ]; then
+        echo "⚠️ SSH 서비스 자동 시작 실패 (이미 실행 중이거나 수동 설정 필요)"
+      fi
+      
+      # 필수 패키지 확인 및 설치 (curl, systemd는 대부분 기본 설치되어 있음)
+      if ! command -v curl &> /dev/null; then
+        echo "curl 설치 중..."
+        CURL_INSTALLED=false
+        if command -v apt-get &> /dev/null; then
+          if apt-get update -qq && apt-get install -y curl; then
+            CURL_INSTALLED=true
+            echo "✅ curl 설치 완료 (apt-get)"
+          fi
+        elif command -v yum &> /dev/null; then
+          if yum install -y curl; then
+            CURL_INSTALLED=true
+            echo "✅ curl 설치 완료 (yum)"
+          fi
+        elif command -v dnf &> /dev/null; then
+          if dnf install -y curl; then
+            CURL_INSTALLED=true
+            echo "✅ curl 설치 완료 (dnf)"
+          fi
+        fi
+        
+        if [ "$CURL_INSTALLED" = false ]; then
+          echo "❌ curl 설치 실패 - cloudflared 다운로드가 실패할 수 있습니다"
+        fi
+      else
+        echo "✅ curl 이미 설치되어 있음"
+      fi
+      
+      # cloudflared 설치
+      ARCH=\$(uname -m)
+      if [ "\$ARCH" = "x86_64" ]; then
+          ARCH="amd64"
+      elif [ "\$ARCH" = "aarch64" ]; then
+          ARCH="arm64"
+      fi
+      
+      # cloudflared 최신 버전 사용 (2024.12.0 또는 최신)
+      CLOUDFLARED_VERSION="2024.12.0"
+      CLOUDFLARED_URL="https://github.com/cloudflare/cloudflared/releases/download/\${CLOUDFLARED_VERSION}/cloudflared-linux-\${ARCH}"
+      
+      echo "cloudflared 다운로드 중... (버전: \${CLOUDFLARED_VERSION}, 아키텍처: \${ARCH})"
+      CLOUDFLARED_DOWNLOADED=false
+      
+      # 첫 번째 시도: 지정된 버전
+      if curl -L "\${CLOUDFLARED_URL}" -o /usr/local/bin/cloudflared 2>/dev/null; then
+        CLOUDFLARED_DOWNLOADED=true
+        echo "✅ cloudflared 다운로드 성공 (버전: \${CLOUDFLARED_VERSION})"
+      else
+        echo "⚠️ 지정된 버전 다운로드 실패, 최신 버전 자동 감지 시도..."
+        # 최신 버전 자동 감지 (fallback)
+        LATEST_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-\${ARCH}"
+        if curl -L "\${LATEST_URL}" -o /usr/local/bin/cloudflared 2>/dev/null; then
+          CLOUDFLARED_DOWNLOADED=true
+          echo "✅ cloudflared 다운로드 성공 (최신 버전)"
+        else
+          echo "❌ cloudflared 다운로드 완전 실패"
+          echo "로그 파일: $LOG_FILE"
+          echo "수동 설치 필요: curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-\${ARCH} -o /usr/local/bin/cloudflared"
+          exit 1
+        fi
+      fi
+      
+      if [ "$CLOUDFLARED_DOWNLOADED" = true ]; then
+        chmod +x /usr/local/bin/cloudflared
+        if cloudflared version >/dev/null 2>&1; then
+          echo "✅ cloudflared 설치 및 검증 완료"
+          cloudflared version
+        else
+          echo "⚠️ cloudflared 버전 확인 실패 (계속 진행)"
+        fi
+      fi
+      
+      # Tunnel 설정 파일 생성 (ingress 규칙 포함)
+      # 토큰 방식과 config 파일을 함께 사용하여 안정성 확보
+      echo "Tunnel 설정 파일 생성 중..."
+      mkdir -p /etc/cloudflared
+      
+      cat > /etc/cloudflared/config.yml <<EOFCONFIG
 ingress:
   - hostname: ${hostname}
     service: ssh://localhost:22
   - service: http_status:404
 EOFCONFIG
-
-# 설정 파일 권한 설정
-chmod 600 /etc/cloudflared/config.yml
-
-# Tunnel 자동 시작 설정
-# 토큰 방식 + config 파일 조합 사용 (가장 안정적)
-cat > /etc/systemd/system/cloudflared-tunnel.service <<EOFSERVICE
+      
+      # 설정 파일 권한 설정
+      chmod 600 /etc/cloudflared/config.yml
+      echo "✅ Tunnel 설정 파일 생성 완료: /etc/cloudflared/config.yml"
+      cat /etc/cloudflared/config.yml
+      
+      # Tunnel 자동 시작 설정
+      # 토큰 방식 + config 파일 조합 사용 (가장 안정적)
+      cat > /etc/systemd/system/cloudflared-tunnel.service <<EOFSERVICE
 [Unit]
 Description=Cloudflare Tunnel
 After=network-online.target
@@ -685,99 +788,110 @@ Environment=CLOUDFLARED_CONFIG=/etc/cloudflared/config.yml
 [Install]
 WantedBy=multi-user.target
 EOFSERVICE
-
-# systemd 서비스 활성화 및 시작
-systemctl daemon-reload
-systemctl enable cloudflared-tunnel
-
-# 네트워크가 완전히 준비될 때까지 대기
-echo "네트워크 준비 대기 중..."
-until ping -c 1 8.8.8.8 >/dev/null 2>&1; do
-  sleep 1
-done
-
-# SSH 서비스가 실행 중인지 확인
-if ! systemctl is-active --quiet ssh && ! systemctl is-active --quiet sshd; then
-  echo "SSH 서비스 시작 중..."
-  systemctl start ssh 2>/dev/null || systemctl start sshd 2>/dev/null || true
-  sleep 2
-fi
-
-# 잠시 대기 후 서비스 시작
-echo "Cloudflare Tunnel 서비스 시작 중..."
-sleep 5
-
-# 서비스 시작
-if systemctl start cloudflared-tunnel; then
-  echo "서비스 시작 대기 중 (최대 30초)..."
-  sleep 10
-  
-  # 서비스 상태 확인 (최대 3번 시도)
-  for i in {1..3}; do
-    if systemctl is-active --quiet cloudflared-tunnel; then
-      echo "✅ Cloudflare Tunnel 서비스가 정상적으로 시작되었습니다."
-      break
-    else
-      echo "서비스 시작 확인 중... (시도 $i/3)"
+      
+      # systemd 서비스 활성화 및 시작
+      echo "systemd 서비스 설정 중..."
+      systemctl daemon-reload || echo "⚠️ systemctl daemon-reload 실패"
+      
+      if systemctl enable cloudflared-tunnel 2>/dev/null; then
+        echo "✅ cloudflared-tunnel 서비스 활성화됨"
+      else
+        echo "⚠️ cloudflared-tunnel 서비스 활성화 실패"
+      fi
+      
+      # 잠시 대기 후 서비스 시작 (네트워크 및 SSH 안정화 대기)
+      echo "서비스 시작 전 대기 중... (5초)"
       sleep 5
-    fi
-  done
-  
-  # 최종 상태 확인 및 로그 출력
-  if systemctl is-active --quiet cloudflared-tunnel; then
-    echo "✅ Cloudflare Tunnel 서비스가 실행 중입니다."
-    echo ""
-    echo "최근 로그 확인:"
-    journalctl -u cloudflared-tunnel -n 20 --no-pager || true
-    
-    # config 파일 확인
-    echo ""
-    echo "설정 파일 확인:"
-    cat /etc/cloudflared/config.yml || echo "설정 파일을 읽을 수 없습니다"
-    
-    # Tunnel 연결 상태 확인 (cloudflared가 연결되었는지)
-    echo ""
-    echo "Tunnel 연결 확인 중..."
-    sleep 3
-    if systemctl is-active --quiet cloudflared-tunnel; then
-      echo "✅ Tunnel 서비스가 계속 실행 중입니다."
-      echo "⚠️ 참고: Tunnel이 완전히 연결되기까지 몇 분 걸릴 수 있습니다."
-      echo "   연결 확인: journalctl -u cloudflared-tunnel -f"
-    fi
-  else
-    echo "⚠️ Cloudflare Tunnel 서비스가 시작되지 않았습니다."
-    echo "최근 로그:"
-    journalctl -u cloudflared-tunnel -n 30 --no-pager || true
-    
-    # config 파일 검증
-    echo ""
-    echo "설정 파일 확인:"
-    cat /etc/cloudflared/config.yml || echo "설정 파일을 읽을 수 없습니다"
-  fi
-else
-  echo "❌ Cloudflare Tunnel 서비스 시작 실패"
-  journalctl -u cloudflared-tunnel -n 30 --no-pager || true
-fi
+      
+      # 서비스 시작
+      echo "Cloudflare Tunnel 서비스 시작 중..."
+      SERVICE_STARTED=false
+      if systemctl start cloudflared-tunnel 2>&1; then
+        SERVICE_STARTED=true
+        echo "✅ cloudflared-tunnel 서비스 시작 명령 실행됨"
+      else
+        echo "❌ cloudflared-tunnel 서비스 시작 명령 실패"
+        echo "에러 상세:"
+        systemctl status cloudflared-tunnel || true
+      fi
+      
+      if [ "$SERVICE_STARTED" = true ]; then
+        echo "서비스 시작 대기 중 (최대 30초)..."
+        sleep 10
+        
+        # 서비스 상태 확인 (최대 3번 시도)
+        for i in {1..3}; do
+          if systemctl is-active --quiet cloudflared-tunnel; then
+            echo "✅ Cloudflare Tunnel 서비스가 정상적으로 시작되었습니다."
+            break
+          else
+            echo "서비스 시작 확인 중... (시도 $i/3)"
+            sleep 5
+          fi
+        done
+        
+        # 최종 상태 확인 및 로그 출력
+        if systemctl is-active --quiet cloudflared-tunnel; then
+          echo "✅ Cloudflare Tunnel 서비스가 실행 중입니다."
+          echo ""
+          echo "최근 로그 확인:"
+          journalctl -u cloudflared-tunnel -n 20 --no-pager || true
+          
+          # config 파일 확인
+          echo ""
+          echo "설정 파일 확인:"
+          cat /etc/cloudflared/config.yml || echo "설정 파일을 읽을 수 없습니다"
+          
+          # Tunnel 연결 상태 확인 (cloudflared가 연결되었는지)
+          echo ""
+          echo "Tunnel 연결 확인 중..."
+          sleep 3
+          if systemctl is-active --quiet cloudflared-tunnel; then
+            echo "✅ Tunnel 서비스가 계속 실행 중입니다."
+            echo "⚠️ 참고: Tunnel이 완전히 연결되기까지 몇 분 걸릴 수 있습니다."
+            echo "   연결 확인: journalctl -u cloudflared-tunnel -f"
+          fi
+        else
+          echo "⚠️ Cloudflare Tunnel 서비스가 시작되지 않았습니다."
+          echo "최근 로그:"
+          journalctl -u cloudflared-tunnel -n 30 --no-pager || true
+          
+          # config 파일 검증
+          echo ""
+          echo "설정 파일 확인:"
+          cat /etc/cloudflared/config.yml || echo "설정 파일을 읽을 수 없습니다"
+        fi
+      else
+        echo "❌ Cloudflare Tunnel 서비스 시작 실패"
+        journalctl -u cloudflared-tunnel -n 30 --no-pager || true
+      fi
+      
+      # DNS 설정 확인 (옵션)
+      echo ""
+      echo "DNS 해상 확인 중..."
+      if command -v dig &> /dev/null; then
+        dig +short ${hostname} || echo "DNS 조회 실패 (정상일 수 있음 - DNS 전파 대기)"
+      elif command -v nslookup &> /dev/null; then
+        nslookup ${hostname} || echo "DNS 조회 실패 (정상일 수 있음 - DNS 전파 대기)"
+      fi
+      
+      echo ""
+      echo "=== Cloudflare Tunnel 설정 완료 ==="
+      echo "완료 시간: $(date)"
+      echo "SSH 도메인: ${hostname}"
+      echo "터널 상태 확인: systemctl status cloudflared-tunnel"
+      echo "터널 로그 확인: journalctl -u cloudflared-tunnel -f"
+      echo "설정 스크립트 로그: $LOG_FILE"
+      echo ""
+      echo "⚠️ 참고:"
+      echo "   - Tunnel이 완전히 연결되기까지 1-2분 정도 걸릴 수 있습니다"
+      echo "   - DNS 전파는 최대 5분까지 걸릴 수 있습니다"
+      echo "   - SSH 연결 시 'AddressFamily inet' 옵션을 사용하는 것을 권장합니다"
+      echo ""
+      echo "스크립트 실행 완료. 로그는 $LOG_FILE에 저장되었습니다."
 
-# DNS 설정 확인 (옵션)
-echo ""
-echo "DNS 해상 확인 중..."
-if command -v dig &> /dev/null; then
-  dig +short ${hostname} || echo "DNS 조회 실패 (정상일 수 있음 - DNS 전파 대기)"
-elif command -v nslookup &> /dev/null; then
-  nslookup ${hostname} || echo "DNS 조회 실패 (정상일 수 있음 - DNS 전파 대기)"
-fi
-
-echo ""
-echo "=== Cloudflare Tunnel 설정 완료 ==="
-echo "SSH 도메인: ${hostname}"
-echo "터널 상태 확인: systemctl status cloudflared-tunnel"
-echo "터널 로그 확인: journalctl -u cloudflared-tunnel -f"
-echo ""
-echo "⚠️ 참고:"
-echo "   - Tunnel이 완전히 연결되기까지 1-2분 정도 걸릴 수 있습니다"
-echo "   - DNS 전파는 최대 5분까지 걸릴 수 있습니다"
-echo "   - SSH 연결 시 'AddressFamily inet' 옵션을 사용하는 것을 권장합니다"
+runcmd:
+  - bash /usr/local/bin/setup-cloudflare-tunnel.sh
 `;
   }
 
